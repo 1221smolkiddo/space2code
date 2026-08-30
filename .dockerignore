@@ -1,0 +1,16 @@
+.git
+.github
+.codex
+.agents
+node_modules
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+coverage
+*.log
+*.tsbuildinfo
+frontend/src
+frontend/public
+docs

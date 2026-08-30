@@ -1,0 +1,30 @@
+node_modules/
+dist/
+coverage/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.envrc
+.npmrc
+.yarnrc
+.pypirc
+
+# Certificates / keys / tokens
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.secret
+*.token
+
+# OS / logs
+*.log
+.DS_Store

@@ -1,0 +1,30 @@
+services:
+  piston:
+    image: ${PISTON_IMAGE:-ghcr.io/engineer-man/piston:latest}
+    container_name: space2code-piston
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "127.0.0.1:2000:2000"
+    volumes:
+      - piston-packages:/piston/packages
+    tmpfs:
+      - /tmp:exec,nosuid,size=512m
+    environment:
+      PISTON_LOG_LEVEL: INFO
+      PISTON_DISABLE_NETWORKING: "true"
+      PISTON_MAX_PROCESS_COUNT: "64"
+      PISTON_OUTPUT_MAX_SIZE: "65536"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:2000/api/v2/runtimes',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+volumes:
+  piston-packages:

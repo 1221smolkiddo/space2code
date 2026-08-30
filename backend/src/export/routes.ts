@@ -1,0 +1,5 @@
+import type {FastifyInstance,FastifyReply,FastifyRequest} from 'fastify'
+import {z} from 'zod'
+import {bearerToken,type AuthService,type AuthenticatedUser} from '../auth/auth-service.js'
+import type {SessionExportService} from './service.js'
+export async function registerExportRoutes(app:FastifyInstance,o:{authService:AuthService;exportService:SessionExportService}){const auth=async(r:FastifyRequest,p:FastifyReply):Promise<AuthenticatedUser|null>=>{try{return await o.authService.verifyAccessToken(bearerToken(r.headers.authorization))}catch{await p.code(401).send({error:{code:'UNAUTHORIZED',message:'Authentication required'}});return null}};app.get('/v1/sessions/:sessionId/export',async(r,p)=>{const u=await auth(r,p);if(!u)return;const {sessionId}=z.object({sessionId:z.string().uuid()}).parse(r.params);const result=await o.exportService.generate(sessionId,u.id);return p.header('content-type','application/zip').header('content-disposition',`attachment; filename="${result.filename}"`).send(Buffer.from(result.bytes))})}
