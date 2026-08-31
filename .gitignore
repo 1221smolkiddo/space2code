@@ -13,6 +13,10 @@ coverage/
 .yarnrc
 .pypirc
 
+# Repo-local agent skills (developer tooling only)
+.agents/skills/
+skills-lock.json
+
 # Certificates / keys / tokens
 *.pem
 *.key
