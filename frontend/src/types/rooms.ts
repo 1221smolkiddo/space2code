@@ -31,6 +31,12 @@ export interface Participant {
   leftAt: string | null
 }
 
+export interface ParticipantProfile {
+  userId: string
+  displayName: string | null
+  avatarUrl: string | null
+}
+
 export interface Room {
   id: string
   roomCode: string
@@ -49,12 +55,13 @@ export interface Room {
   questions: SessionQuestions
   timer: SessionTimer
   participants: Participant[]
+  partner: ParticipantProfile | null
 }
 
 export interface RecentSession {
   sessionId: string
   partnerId: string | null
-  partner: { userId: string; displayName: string | null; avatarUrl: string | null } | null
+  partner: ParticipantProfile | null
   language: string
   status: SessionStatus
   createdAt: string

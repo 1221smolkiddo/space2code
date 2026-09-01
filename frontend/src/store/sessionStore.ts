@@ -5,6 +5,7 @@ import { collaborationApi } from '../api/collaboration'
 import { socialApi } from '../api/social'
 import { ApiError } from '../api/client'
 import { useAuthStore } from './authStore'
+import { participantName } from '../utils/participantName'
 import type {
   ChatMessageDto, EditorPermission, ExplainAnnotation, ExplainMessage, ExplainState,
   PermissionRequest, PermissionScope, Room, RoomEventEnvelope, RoomResponse, SessionTimer, Slot,
@@ -88,9 +89,17 @@ const timerView = (timer:SessionTimer,serverTimeOffsetMs=0):TimerView => {
   const seconds=remaining(timer,serverTimeOffsetMs)
   return { ...timer, status:timer.status==='running'&&seconds<=0?'expired':timer.status, remainingSeconds:seconds }
 }
-const participantName = (id:string) => id===useAuthStore.getState().user?.id?'You':`Coder ${id.slice(0,6)}`
-const chat = (message:ChatMessageDto):ChatMessage => ({id:message.id,senderId:message.senderId,senderName:participantName(message.senderId),text:message.content,timestamp:new Date(message.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})
-const explainChat = (message:ExplainMessage):ChatMessage => ({id:message.id,senderId:message.senderId,senderName:participantName(message.senderId),text:message.content,timestamp:new Date(message.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})
+const hasPartnerProfile = (room:Room):boolean => Object.prototype.hasOwnProperty.call(room,'partner')
+const resolvePartnerProfile = async(room:Room):Promise<Room> => {
+  if(hasPartnerProfile(room))return room
+  try{
+    const recent=await socialApi.recent()
+    return {...room,partner:recent.sessions.find(session=>session.sessionId===room.id)?.partner??null}
+  }catch{return {...room,partner:null}}
+}
+const preservePartnerProfile = (room:Room,current:Room|null):Room => hasPartnerProfile(room)?room:{...room,partner:current?.partner??null}
+const chat = (message:ChatMessageDto,room:Room|null):ChatMessage => ({id:message.id,senderId:message.senderId,senderName:participantName(room,message.senderId,useAuthStore.getState().user?.id),text:message.content,timestamp:new Date(message.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})
+const explainChat = (message:ExplainMessage,room:Room|null):ChatMessage => ({id:message.id,senderId:message.senderId,senderName:participantName(room,message.senderId,useAuthStore.getState().user?.id),text:message.content,timestamp:new Date(message.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})
 const seenEvents = new Set<string>()
 let questionTimer:ReturnType<typeof setTimeout>|null=null
 
@@ -101,30 +110,30 @@ export const useSessionStore=create<SessionState>((set,get)=>({
   editorA:emptyEditor(),editorB:emptyEditor(),permissionRequests:[],permissions:[],
   isExplainMode:false,explainPrimarySlot:'A',explainState:null,annotations:[],highlightedLines:[],
   isChatOpen:true,normalMessages:[],explainMessages:[],messages:[],
-  createSession:async(language)=>{set({isLoading:true,error:null});try{const result=await roomsApi.create(language);set({isLoading:false,room:result.room,documents:result.documents,roomId:result.room.id,roomCode:result.room.roomCode,language:result.room.language});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
-  joinSession:async(roomCode)=>{set({isLoading:true,error:null});try{const result=await roomsApi.join(roomCode);set({isLoading:false,room:result.room,documents:result.documents,roomId:result.room.id,roomCode:result.room.roomCode,language:result.room.language});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
+  createSession:async(language)=>{set({isLoading:true,error:null});try{const response=await roomsApi.create(language),room=await resolvePartnerProfile(response.room),result={...response,room};set({isLoading:false,room,documents:result.documents,roomId:room.id,roomCode:room.roomCode,language:room.language});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
+  joinSession:async(roomCode)=>{set({isLoading:true,error:null});try{const response=await roomsApi.join(roomCode),room=await resolvePartnerProfile(response.room),result={...response,room};set({isLoading:false,room,documents:result.documents,roomId:room.id,roomCode:room.roomCode,language:room.language});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
   hydrate:async(roomId,signal)=>{
     set({isLoading:true,error:null,connectionState:'connecting'})
     try{
       const [result,permissionState,chatState,explain] = await Promise.all([
         roomsApi.getWithClock(roomId,signal), roomsApi.permissions(roomId), collaborationApi.chat(roomId), collaborationApi.explain(roomId),
       ])
-      const roomResponse=result.data,serverTimeOffsetMs=result.meta.serverTimeOffsetMs??0
+      const roomResponse=result.data,room=await resolvePartnerProfile(roomResponse.room),serverTimeOffsetMs=result.meta.serverTimeOffsetMs??0
       const userId=useAuthStore.getState().user?.id
-      const current=roomResponse.room.participants.find(p=>p.userId===userId)?.slot??null
-      const partner=roomResponse.room.participants.find(p=>p.userId!==userId)
+      const current=room.participants.find(p=>p.userId===userId)?.slot??null
+      const partner=room.participants.find(p=>p.userId!==userId)
       const permissions=permissionState.permissions
       const requests=permissionState.requests
       const editor=(slot:Slot):EditorCardState=>{
-        const owner=roomResponse.room.participants.find(p=>p.slot===slot)?.userId
+        const owner=room.participants.find(p=>p.slot===slot)?.userId
         const permission=permissions.find(p=>p.editorOwnerId===owner&&p.granteeId===userId&&!p.revokedAt&&!p.consumedAt)
         const pending=requests.some(r=>r.requesterId===userId&&r.editorOwnerId===owner&&r.status==='pending')
         return {...emptyEditor(),permission:slot===current||permission?'granted':pending?'pending':'none',permissionScope:permission?.scope}
       }
-      const normalMessages=chatState.messages.map(chat), explainMessages=explain.messages.map(explainChat)
-      set({room:roomResponse.room,documents:roomResponse.documents,roomId:roomResponse.room.id,roomCode:roomResponse.room.roomCode,
-        language:roomResponse.room.language,currentSlot:current,questionA:roomResponse.room.questions.A??'',questionB:roomResponse.room.questions.B??'',
-        timer:timerView(roomResponse.room.timer,serverTimeOffsetMs),serverTimeOffsetMs,partnerState:partner?.state==='connected'?'connected':'disconnected',
+      const normalMessages=chatState.messages.map(message=>chat(message,room)), explainMessages=explain.messages.map(message=>explainChat(message,room))
+      set({room,documents:roomResponse.documents,roomId:room.id,roomCode:room.roomCode,
+        language:room.language,currentSlot:current,questionA:room.questions.A??'',questionB:room.questions.B??'',
+        timer:timerView(room.timer,serverTimeOffsetMs),serverTimeOffsetMs,partnerState:partner?.state==='connected'?'connected':'disconnected',
         isPartnerOnline:partner?.state==='connected',permissions,permissionRequests:requests,editorA:editor('A'),editorB:editor('B'),
         explainState:explain.state,isExplainMode:explain.state.active,explainPrimarySlot:explain.state.targetSlot??current??'A',
         annotations:explain.annotations,highlightedLines:explain.annotations.filter(a=>a.type==='highlight').flatMap(a=>a.startLine?[a.startLine]:[]),
@@ -142,8 +151,8 @@ export const useSessionStore=create<SessionState>((set,get)=>({
     }else if(event.type==='session.ended')set({partnerState:'disconnected',isPartnerOnline:false,error:'Your partner ended this live session. The saved board remains in Recent Sessions.'})
     else if(event.type==='question.updated')set({[event.slot==='A'?'questionA':'questionB']:event.question??''})
     else if(event.type==='timer.started'||event.type==='timer.expired')set({timer:timerView(event.timer,get().serverTimeOffsetMs)})
-    else if(event.type==='chat.message'){const value=chat(event.message);if(!get().normalMessages.some(m=>m.id===value.id)){const normalMessages=[...get().normalMessages,value];set({normalMessages,messages:get().isExplainMode?get().messages:normalMessages})}}
-    else if(event.type==='explain.message'){const value=explainChat(event.message);if(!get().explainMessages.some(m=>m.id===value.id)){const explainMessages=[...get().explainMessages,value];set({explainMessages,messages:get().isExplainMode?explainMessages:get().messages})}}
+    else if(event.type==='chat.message'){const value=chat(event.message,get().room);if(!get().normalMessages.some(m=>m.id===value.id)){const normalMessages=[...get().normalMessages,value];set({normalMessages,messages:get().isExplainMode?get().messages:normalMessages})}}
+    else if(event.type==='explain.message'){const value=explainChat(event.message,get().room);if(!get().explainMessages.some(m=>m.id===value.id)){const explainMessages=[...get().explainMessages,value];set({explainMessages,messages:get().isExplainMode?explainMessages:get().messages})}}
     else if(event.type==='explain.state'||event.type==='explain.arbitrated'){set({explainState:event.state,isExplainMode:event.state.active,explainPrimarySlot:event.state.targetSlot??get().explainPrimarySlot,messages:event.state.active?get().explainMessages:get().normalMessages})}
     else if(event.type==='explain.annotation'){if(!get().annotations.some(a=>a.id===event.annotation.id))set({annotations:[...get().annotations,event.annotation]})}
     else if(event.type==='permission.requested'){set({permissionRequests:[...get().permissionRequests.filter(r=>r.id!==event.request.id),event.request]})}
@@ -158,7 +167,7 @@ export const useSessionStore=create<SessionState>((set,get)=>({
   setTimer:async(minutes)=>{try{const{timer}=await roomsApi.startTimer(get().roomId,minutes*60);set({timer:timerView(timer,get().serverTimeOffsetMs)})}catch(error){set({error:safeError(error)})}},
   tickTimer:()=>set({timer:timerView(get().timer,get().serverTimeOffsetMs)}),
   toggleQuestionPanel:()=>set({isQuestionOpen:!get().isQuestionOpen}),
-  setQuestion:(slot,text)=>{if(slot!==get().currentSlot||(get().room?.status!=='waiting'&&get().room?.status!=='live'))return;set({[slot==='A'?'questionA':'questionB']:text,questionSaveState:'saving'});if(questionTimer)clearTimeout(questionTimer);questionTimer=setTimeout(async()=>{try{const result=await roomsApi.question(get().roomId,text.trim()||null);set({room:result.room,questionSaveState:'saved'})}catch(error){set({questionSaveState:'error',error:safeError(error)})}},650)},
+  setQuestion:(slot,text)=>{if(slot!==get().currentSlot||(get().room?.status!=='waiting'&&get().room?.status!=='live'))return;set({[slot==='A'?'questionA':'questionB']:text,questionSaveState:'saving'});if(questionTimer)clearTimeout(questionTimer);questionTimer=setTimeout(async()=>{try{const result=await roomsApi.question(get().roomId,text.trim()||null);set({room:preservePartnerProfile(result.room,get().room),questionSaveState:'saved'})}catch(error){set({questionSaveState:'error',error:safeError(error)})}},650)},
   toggleOutput:(slot)=>{const key=slot==='A'?'editorA':'editorB';set({[key]:{...get()[key],isOutputOpen:!get()[key].isOutputOpen}})},
   setStdin:(slot,stdin)=>{const key=slot==='A'?'editorA':'editorB';set({[key]:{...get()[key],stdin}})},
   runCode:async(slot,source)=>{const key=slot==='A'?'editorA':'editorB',editor=get()[key];if(editor.outputState==='running')return;set({[key]:{...editor,outputState:'running',isOutputOpen:true,stdout:'',stderr:''}});try{const result=await executionApi.run(get().roomId,{language:get().language,source,stdin:get()[key].stdin});const stderr=[result.compileOutput,result.stderr].filter(Boolean).join('\n')||(result.status==='completed'?'':`Execution ended with ${result.status.replaceAll('_',' ')}.`);set({[key]:{...get()[key],outputState:result.status==='completed'?'success':result.status==='compile_error'?'compile_error':'error',stdout:result.stdout,stderr}})}catch(error){set({[key]:{...get()[key],outputState:'error',stderr:safeError(error)},error:safeError(error)})}},
@@ -169,7 +178,7 @@ export const useSessionStore=create<SessionState>((set,get)=>({
   addAnnotation:async(slot,startLine,endLine,text)=>{try{const result=await collaborationApi.annotate(get().roomId,{targetSlot:slot,startLine,endLine,type:text?'note':'highlight',text}) as {annotation:ExplainAnnotation};set({annotations:[...get().annotations,result.annotation]})}catch(error){set({error:safeError(error)})}},
   removeAnnotation:async(id)=>{try{await collaborationApi.removeAnnotation(get().roomId,id);set({annotations:get().annotations.filter(a=>a.id!==id)})}catch(error){set({error:safeError(error)})}},
   toggleChat:()=>set({isChatOpen:!get().isChatOpen}),
-  sendMessage:async(text)=>{try{if(get().isExplainMode){const result=await collaborationApi.sendExplain(get().roomId,text) as {message:ExplainMessage};const value=explainChat(result.message);if(!get().explainMessages.some(m=>m.id===value.id))set({explainMessages:[...get().explainMessages,value],messages:[...get().messages,value]})}else{const{message}=await collaborationApi.sendChat(get().roomId,text);const value=chat(message);if(!get().normalMessages.some(m=>m.id===value.id))set({normalMessages:[...get().normalMessages,value],messages:[...get().messages,value]})}}catch(error){set({error:safeError(error)})}},
+  sendMessage:async(text)=>{try{if(get().isExplainMode){const result=await collaborationApi.sendExplain(get().roomId,text) as {message:ExplainMessage};const value=explainChat(result.message,get().room);if(!get().explainMessages.some(m=>m.id===value.id))set({explainMessages:[...get().explainMessages,value],messages:[...get().messages,value]})}else{const{message}=await collaborationApi.sendChat(get().roomId,text);const value=chat(message,get().room);if(!get().normalMessages.some(m=>m.id===value.id))set({normalMessages:[...get().normalMessages,value],messages:[...get().messages,value]})}}catch(error){set({error:safeError(error)})}},
   leaveSession:async()=>{try{await roomsApi.leave(get().roomId);await socialApi.setPresence('ONLINE').catch(()=>undefined)}catch(error){set({error:safeError(error)});throw error}},
   exportSession:async()=>{try{const{blob,filename}=await collaborationApi.export(get().roomId);const url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=filename;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),0)}catch(error){set({error:safeError(error)});throw error}},
   clearError:()=>set({error:null}),

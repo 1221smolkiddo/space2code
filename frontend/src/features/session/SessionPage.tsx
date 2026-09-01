@@ -6,6 +6,7 @@ import { SessionHeader } from './SessionHeader';
 import { EditorPanel } from './EditorPanel';
 import { QuestionSheet } from './QuestionSheet';
 import { ChatDrawer } from './ChatDrawer';
+import { participantName } from '../../utils/participantName';
 
 export const SessionPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -29,8 +30,8 @@ export const SessionPage: React.FC = () => {
     }
   }, [id, hydrate]);
 
-  const partner=room?.participants.find((participant)=>participant.userId!==user?.id);
-  const partnerName=partner?`Coder ${partner.userId.slice(0,6)}`:'Waiting for partner';
+  const partnerId=room?.partner?.userId??room?.participants.find((participant)=>participant.userId!==user?.id)?.userId;
+  const partnerName=partnerId?participantName(room,partnerId,user?.id):'Waiting for partner';
 
   if(isLoading)return <div className="app-loading" role="status">Restoring the shared coding desk…</div>;
   if(error&&!room)return <div className="app-loading" role="alert">{error}</div>;
@@ -76,6 +77,7 @@ export const SessionPage: React.FC = () => {
           <EditorPanel
             slot="A"
             username={currentSlot === 'A' ? user?.displayName || 'You' : partnerName}
+            partnerName={partnerName}
             isOwner={currentSlot === 'A'}
             isPartnerOnline={currentSlot === 'A' ? true : isPartnerOnline}
             language={language}
@@ -85,6 +87,7 @@ export const SessionPage: React.FC = () => {
           <EditorPanel
             slot="B"
             username={currentSlot === 'B' ? user?.displayName || 'You' : partnerName}
+            partnerName={partnerName}
             isOwner={currentSlot === 'B'}
             isPartnerOnline={currentSlot === 'B' ? true : isPartnerOnline}
             language={language}

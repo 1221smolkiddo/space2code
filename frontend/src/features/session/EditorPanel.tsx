@@ -24,6 +24,7 @@ import {
 interface EditorPanelProps {
   slot: 'A' | 'B';
   username: string;
+  partnerName: string;
   isOwner: boolean;
   isPartnerOnline: boolean;
   language: string;
@@ -32,6 +33,7 @@ interface EditorPanelProps {
 export const EditorPanel: React.FC<EditorPanelProps> = ({
   slot,
   username,
+  partnerName,
   isOwner,
   isPartnerOnline,
   language,
@@ -296,7 +298,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
               fontSize: '0.725rem',
             }}
           >
-            <span style={{ fontWeight: 600, color: 'var(--warm-accent)' }}>Partner requests edit:</span>
+            <span style={{ fontWeight: 600, color: 'var(--warm-accent)' }}>{partnerName} requests edit:</span>
             <button
               onClick={() => void resolvePermission('grant_once')}
               className="btn btn-primary"
@@ -324,7 +326,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         {/* Right Header Actions (Run & Terminal Toggle) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
           {isOwner && activeGrant && activeGrant.editorOwnerId === ownerId && (
-            <button onClick={() => void useSessionStore.getState().revokePermission(activeGrant.granteeId)} className="btn-ghost" style={{fontSize:'0.7rem'}}>Revoke edit</button>
+            <button onClick={() => void useSessionStore.getState().revokePermission(activeGrant.granteeId)} className="btn-ghost" style={{fontSize:'0.7rem'}}>Revoke {partnerName}'s edit</button>
           )}
           {isExplainMode && (
             <><button onClick={handleAnnotate} className="btn-ghost" style={{fontSize:'0.7rem'}} title="Highlight selected lines">Highlight</button><button onClick={handleNote} className="btn-ghost" style={{fontSize:'0.7rem'}} title="Annotate selected lines">Note</button></>

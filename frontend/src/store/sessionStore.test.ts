@@ -4,18 +4,18 @@ import type { Room, RoomResponse } from '../types'
 const mocks = vi.hoisted(() => ({
   getWithClock:vi.fn(),create:vi.fn(),join:vi.fn(),permissions:vi.fn(),question:vi.fn(),startTimer:vi.fn(),leave:vi.fn(),
   run:vi.fn(),chat:vi.fn(),explain:vi.fn(),sendChat:vi.fn(),activate:vi.fn(),deactivate:vi.fn(),export:vi.fn(),
-  setPresence:vi.fn(),
+  setPresence:vi.fn(),recent:vi.fn(),
 }))
 vi.mock('../api/rooms',()=>({roomsApi:{getWithClock:mocks.getWithClock,create:mocks.create,join:mocks.join,permissions:mocks.permissions,question:mocks.question,startTimer:mocks.startTimer,leave:mocks.leave}}))
 vi.mock('../api/execution',()=>({executionApi:{run:mocks.run}}))
-vi.mock('../api/social',()=>({socialApi:{setPresence:mocks.setPresence}}))
+vi.mock('../api/social',()=>({socialApi:{setPresence:mocks.setPresence,recent:mocks.recent}}))
 vi.mock('../api/collaboration',()=>({collaborationApi:{chat:mocks.chat,explain:mocks.explain,sendChat:mocks.sendChat,sendExplain:vi.fn(),activate:mocks.activate,deactivate:mocks.deactivate,annotate:vi.fn(),removeAnnotation:vi.fn(),export:mocks.export}}))
 
 import { useAuthStore } from './authStore'
 import { useSessionStore } from './sessionStore'
 
 const userA='00000000-0000-4000-8000-000000000001', userB='00000000-0000-4000-8000-000000000002'
-const room:Room={id:'10000000-0000-4000-8000-000000000001',roomCode:'ABC234',language:'python',status:'live',createdBy:userA,endedBy:null,endedReason:null,createdAt:'2026-08-30T10:00:00Z',lastActiveAt:'2026-08-30T10:00:00Z',startedAt:'2026-08-30T10:00:00Z',endedAt:null,expiresAt:'2026-08-31T10:00:00Z',resumedFromSessionId:null,resumePartnerId:null,questions:{A:'mine',B:'partner'},timer:{status:'not_started',durationSeconds:null,startedAt:null,endsAt:null,startedBy:null},participants:[{userId:userA,slot:'A',state:'connected',joinedAt:'2026-08-30T10:00:00Z',lastConnectedAt:null,lastDisconnectedAt:null,leftAt:null},{userId:userB,slot:'B',state:'connected',joinedAt:'2026-08-30T10:00:00Z',lastConnectedAt:null,lastDisconnectedAt:null,leftAt:null}]}
+const room:Room={id:'10000000-0000-4000-8000-000000000001',roomCode:'ABC234',language:'python',status:'live',createdBy:userA,endedBy:null,endedReason:null,createdAt:'2026-08-30T10:00:00Z',lastActiveAt:'2026-08-30T10:00:00Z',startedAt:'2026-08-30T10:00:00Z',endedAt:null,expiresAt:'2026-08-31T10:00:00Z',resumedFromSessionId:null,resumePartnerId:null,questions:{A:'mine',B:'partner'},timer:{status:'not_started',durationSeconds:null,startedAt:null,endsAt:null,startedBy:null},participants:[{userId:userA,slot:'A',state:'connected',joinedAt:'2026-08-30T10:00:00Z',lastConnectedAt:null,lastDisconnectedAt:null,leftAt:null},{userId:userB,slot:'B',state:'connected',joinedAt:'2026-08-30T10:00:00Z',lastConnectedAt:null,lastDisconnectedAt:null,leftAt:null}],partner:{userId:userB,displayName:'Grace Hopper',avatarUrl:null}}
 const response:RoomResponse={room,documents:{userA:`room:${room.id}:userA:code`,userB:`room:${room.id}:userB:code`}}
 const explainState={sessionId:room.id,active:false,targetSlot:null,controllerId:null,activatedAt:null,updatedAt:room.createdAt,revision:0}
 
@@ -38,6 +38,27 @@ describe('authoritative session integration',()=>{
     expect(useSessionStore.getState()).toMatchObject({roomId:room.id,currentSlot:'A',questionA:'mine',questionB:'partner',partnerState:'connected'})
     expect(useSessionStore.getState().canWrite('A')).toBe(true)
     expect(useSessionStore.getState().canWrite('B')).toBe(false)
+    expect(mocks.recent).not.toHaveBeenCalled()
+  })
+
+  it('uses real partner names for chat and explain messages from both user perspectives',async()=>{
+    const messages=(senderId:string)=>[{id:`chat-${senderId}`,sessionId:room.id,senderId,content:'hello',createdAt:room.createdAt}]
+    const explainMessages=(senderId:string)=>[{id:`explain-${senderId}`,sessionId:room.id,senderId,content:'look here',createdAt:room.createdAt}]
+
+    mocks.chat.mockResolvedValue({messages:messages(userB)})
+    mocks.explain.mockResolvedValue({state:explainState,messages:explainMessages(userB),annotations:[]})
+    await useSessionStore.getState().hydrate(room.id)
+    expect(useSessionStore.getState().normalMessages[0]?.senderName).toBe('Grace Hopper')
+    expect(useSessionStore.getState().explainMessages[0]?.senderName).toBe('Grace Hopper')
+
+    const roomForB={...room,partner:{userId:userA,displayName:'Ada Lovelace',avatarUrl:null}}
+    useAuthStore.setState({user:{id:userB,email:'b@example.com',displayName:'Grace Hopper',avatarUrl:null}})
+    mocks.getWithClock.mockResolvedValue({data:{...response,room:roomForB},meta:{serverTimeOffsetMs:0}})
+    mocks.chat.mockResolvedValue({messages:messages(userA)})
+    mocks.explain.mockResolvedValue({state:explainState,messages:explainMessages(userA),annotations:[]})
+    await useSessionStore.getState().hydrate(room.id)
+    expect(useSessionStore.getState().normalMessages[0]?.senderName).toBe('Ada Lovelace')
+    expect(useSessionStore.getState().explainMessages[0]?.senderName).toBe('Ada Lovelace')
   })
 
   it('applies authoritative grants and revocations without removing owner access',async()=>{
