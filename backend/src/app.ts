@@ -46,10 +46,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   // ── Multi-origin CORS ──
   const origins = parseOrigins(options.corsOrigin)
   await app.register(cors, {
-    origin: origins,
-    credentials: true,
-    exposedHeaders: ['date', 'x-request-id'],
-  })
+  origin: origins,
+  credentials: true,
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  exposedHeaders: ['date', 'x-request-id'],
+})
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('x-request-id', request.id)
