@@ -15,6 +15,7 @@ const revokeParamsSchema = roomParamsSchema.extend({ granteeId: z.string().uuid(
 const sessionParamsSchema = z.object({ sessionId: z.string().uuid() })
 const questionSchema = z.object({ question: z.string().nullable() })
 const timerSchema = z.object({ durationSeconds: z.number().int() })
+const typingSchema = z.object({ isTyping: z.boolean() })
 
 export interface RoomRoutesOptions {
   roomService: RoomService
@@ -77,6 +78,15 @@ export async function registerRoomRoutes(app: FastifyInstance, options: RoomRout
     if (!user) return
     const { roomId } = roomParamsSchema.parse(request.params)
     return reply.send(roomResponse(await options.roomService.leave(user.id, roomId)))
+  })
+
+  app.put('/v1/rooms/:roomId/typing', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) return
+    const { roomId } = roomParamsSchema.parse(request.params)
+    const { isTyping } = typingSchema.parse(request.body)
+    await options.roomService.setTyping(user.id, roomId, isTyping)
+    return reply.code(204).send()
   })
 
   app.patch('/v1/rooms/:roomId/question', async (request, reply) => {

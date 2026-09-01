@@ -1,25 +1,24 @@
 import React, { useState } from 'react';
 import { Terminal, X, Copy, Check, Play, Loader2 } from 'lucide-react';
 import type { EditorCardState } from '../../store/sessionStore';
-import { useSessionStore } from '../../store/sessionStore';
 
 interface OutputDrawerProps {
-  slot: 'A' | 'B';
+  title: string;
   state: EditorCardState;
-  onClose: () => void;
-  onRun: () => void;
+  onClose?: () => void;
+  onRun?: () => void;
+  onStdinChange: (value: string) => void;
 }
 
 export const OutputDrawer: React.FC<OutputDrawerProps> = ({
-  slot,
+  title,
   state,
   onClose,
   onRun,
+  onStdinChange,
 }) => {
-  const setStdin = useSessionStore((store) => store.setStdin);
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'stdout' | 'stdin'>('stdout');
-  const [stdinValue, setStdinValue] = useState(state.stdin);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(state.stdout || state.stderr || 'No output');
@@ -55,7 +54,7 @@ export const OutputDrawer: React.FC<OutputDrawerProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--warm-accent)', fontWeight: 700, fontSize: '0.75rem' }}>
             <Terminal size={13} />
-            <span>CONSOLE {slot}</span>
+            <span>{title}</span>
           </div>
 
           <div style={{ display: 'flex', gap: '0.25rem' }}>
@@ -98,14 +97,16 @@ export const OutputDrawer: React.FC<OutputDrawerProps> = ({
             </button>
           )}
 
-          <button
-            onClick={onClose}
-            className="btn-ghost"
-            style={{ padding: '0.15rem', color: '#8A8578' }}
-            title="Close Console"
-          >
-            <X size={14} />
-          </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="btn-ghost"
+              style={{ padding: '0.15rem', color: '#8A8578' }}
+              title="Close Console"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -122,8 +123,8 @@ export const OutputDrawer: React.FC<OutputDrawerProps> = ({
               Standard input passed to process:
             </span>
             <textarea
-              value={stdinValue}
-              onChange={(e) => { setStdinValue(e.target.value); setStdin(slot, e.target.value); }}
+              value={state.stdin}
+              onChange={(e) => onStdinChange(e.target.value)}
               placeholder="Enter standard input values here..."
               style={{
                 flex: 1,
@@ -154,13 +155,15 @@ export const OutputDrawer: React.FC<OutputDrawerProps> = ({
         ) : (
           <div style={{ color: '#6A655A', fontStyle: 'italic', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span>No execution output yet. Click 'Run' to execute.</span>
-            <button
-              onClick={onRun}
-              className="btn btn-outline"
-              style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem', borderColor: '#3A3831', color: 'var(--sage)' }}
-            >
-              <Play size={11} /> Run Now
-            </button>
+            {onRun && (
+              <button
+                onClick={onRun}
+                className="btn btn-outline"
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem', borderColor: '#3A3831', color: 'var(--sage)' }}
+              >
+                <Play size={11} /> Run Now
+              </button>
+            )}
           </div>
         )}
       </div>

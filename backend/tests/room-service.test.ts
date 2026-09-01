@@ -84,4 +84,21 @@ describe('RoomService', () => {
       'permission.requested', 'permission.changed', 'permission.requested', 'permission.changed',
     ])
   })
+
+  it('publishes typing as an ephemeral participant event without repository writes', async () => {
+    const repository = new InMemoryRoomRepository()
+    const events: Array<{ type: string; userId?: string; isTyping?: boolean }> = []
+    const service = new RoomService(repository, undefined, { publish: async (_roomId, event) => { events.push(event) } })
+    const room = await service.create(userA, 'python')
+    await service.join(userB, room.roomCode)
+
+    await service.setTyping(userB, room.id, true)
+    await service.setTyping(userB, room.id, false)
+
+    expect(events).toMatchObject([
+      { type: 'participant.typing', userId: userB, isTyping: true },
+      { type: 'participant.typing', userId: userB, isTyping: false },
+    ])
+    await expect(service.setTyping(userC, room.id, true)).rejects.toMatchObject({ code: 'NOT_A_PARTICIPANT' })
+  })
 })

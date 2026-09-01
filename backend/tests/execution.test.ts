@@ -8,7 +8,7 @@ import { InMemoryExecutionGuard } from '../src/execution/guard.js'
 import { initialLanguageRegistry } from '../src/execution/language-registry.js'
 import { ExecutionService } from '../src/execution/service.js'
 import { InMemoryRoomRepository } from '../src/rooms/in-memory-room-repository.js'
-import { RoomService, type Clock } from '../src/rooms/service.js'
+import { RoomService, type Clock, type RoomEvent } from '../src/rooms/service.js'
 
 const userA = '00000000-0000-4000-8000-000000000001'
 const userB = '00000000-0000-4000-8000-000000000002'
@@ -73,6 +73,19 @@ describe('ExecutionService', () => {
     expect(setup.provider.requests[0]).toMatchObject({ language: 'python', filename: 'main.py' })
   })
 
+  it('broadcasts complete output only for the room-scoped Explain terminal', async () => {
+    const setup = await liveExecution()
+    await setup.service.execute({ ...request(setup.roomId, userA), scope: 'explain' })
+    const sharedCompleted=setup.events.find((event)=>event.type==='execution.completed')
+    expect(sharedCompleted).toMatchObject({type:'execution.completed',scope:'explain',result:{stdout:'ok\n',status:'completed'}})
+
+    setup.events.length=0
+    await setup.service.execute({ ...request(setup.roomId, userA), scope: 'personal' })
+    const personalCompleted=setup.events.find((event)=>event.type==='execution.completed')
+    expect(personalCompleted).toMatchObject({type:'execution.completed',scope:'personal'})
+    expect(personalCompleted).not.toHaveProperty('result')
+  })
+
   it('caps total captured output', async () => {
     const setup = await liveExecution({ maxOutputBytes: 4 })
     setup.provider.result = successfulProviderResult('abcdef')
@@ -130,6 +143,7 @@ async function liveExecution(
   const guard = new InMemoryExecutionGuard({
     windowMs: 60_000, userLimit: guardOverrides.userLimit ?? 10, roomLimit: guardOverrides.roomLimit ?? 30,
   })
+  const events:RoomEvent[]=[]
   const service = new ExecutionService(
     repository, provider, initialLanguageRegistry(versions), guard,
     {
@@ -139,8 +153,9 @@ async function liveExecution(
       timeoutMs: limitOverrides.timeoutMs ?? 1_000,
     },
     clock,
+    {publish:async(_roomId,event)=>{events.push(event)}},
   )
-  return { roomId: room.id, provider, service, rooms }
+  return { roomId: room.id, provider, service, rooms, events }
 }
 
 function request(roomId: string, userId: string) {

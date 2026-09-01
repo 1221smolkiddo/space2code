@@ -8,7 +8,7 @@ import { useAuthStore } from './authStore'
 import { participantName } from '../utils/participantName'
 import type {
   ChatMessageDto, EditorPermission, ExplainAnnotation, ExplainMessage, ExplainState,
-  PermissionRequest, PermissionScope, Room, RoomEventEnvelope, RoomResponse, SessionTimer, Slot,
+  ExecutionResult, PermissionRequest, PermissionScope, Room, RoomEventEnvelope, RoomResponse, SessionTimer, Slot,
 } from '../types'
 
 export interface EditorCardState {
@@ -33,6 +33,8 @@ interface SessionState {
   currentSlot: Slot | null
   partnerState: 'connected' | 'disconnected' | 'reconnecting'
   isPartnerOnline: boolean
+  partnerHasLeft: boolean
+  partnerIsTyping: boolean
   connectionState: ConnectionState
   serverTimeOffsetMs: number
   isLoading: boolean
@@ -44,6 +46,7 @@ interface SessionState {
   isQuestionOpen: boolean
   editorA: EditorCardState
   editorB: EditorCardState
+  sharedTerminal: EditorCardState
   permissionRequests: PermissionRequest[]
   permissions: EditorPermission[]
   isExplainMode: boolean
@@ -67,6 +70,7 @@ interface SessionState {
   setQuestion: (slot:Slot,text:string) => void
   toggleOutput: (slot:Slot) => void
   setStdin: (slot:Slot,stdin:string) => void
+  setSharedStdin: (stdin:string) => void
   runCode: (slot:Slot,source:string) => Promise<void>
   requestEditAccess: (slot:Slot) => Promise<void>
   resolvePermission: (decision:'grant_once'|'grant_session'|'deny') => Promise<void>
@@ -76,6 +80,7 @@ interface SessionState {
   removeAnnotation: (id:string) => Promise<void>
   toggleChat: () => void
   sendMessage: (text:string) => Promise<void>
+  setTyping: (isTyping:boolean) => Promise<void>
   leaveSession: () => Promise<void>
   exportSession: () => Promise<void>
   clearError: () => void
@@ -100,14 +105,22 @@ const resolvePartnerProfile = async(room:Room):Promise<Room> => {
 const preservePartnerProfile = (room:Room,current:Room|null):Room => hasPartnerProfile(room)?room:{...room,partner:current?.partner??null}
 const chat = (message:ChatMessageDto,room:Room|null):ChatMessage => ({id:message.id,senderId:message.senderId,senderName:participantName(room,message.senderId,useAuthStore.getState().user?.id),text:message.content,timestamp:new Date(message.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})
 const explainChat = (message:ExplainMessage,room:Room|null):ChatMessage => ({id:message.id,senderId:message.senderId,senderName:participantName(room,message.senderId,useAuthStore.getState().user?.id),text:message.content,timestamp:new Date(message.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})
+const terminalResult = (current:EditorCardState,result:ExecutionResult):EditorCardState => ({
+  ...current,
+  outputState:result.status==='completed'?'success':result.status==='compile_error'?'compile_error':'error',
+  stdout:result.stdout,
+  stderr:[result.compileOutput,result.stderr].filter(Boolean).join('\n')||(result.status==='completed'?'':`Execution ended with ${result.status.replaceAll('_',' ')}.`),
+  isOutputOpen:true,
+})
 const seenEvents = new Set<string>()
 let questionTimer:ReturnType<typeof setTimeout>|null=null
+let partnerTypingTimer:ReturnType<typeof setTimeout>|null=null
 
 export const useSessionStore=create<SessionState>((set,get)=>({
   room:null,documents:null,roomId:'',roomCode:'',language:'python',currentSlot:null,
-  partnerState:'disconnected',isPartnerOnline:false,connectionState:'connecting',serverTimeOffsetMs:0,isLoading:false,error:null,
+  partnerState:'disconnected',isPartnerOnline:false,partnerHasLeft:false,partnerIsTyping:false,connectionState:'connecting',serverTimeOffsetMs:0,isLoading:false,error:null,
   timer:emptyTimer,questionA:'',questionB:'',questionSaveState:'idle',isQuestionOpen:false,
-  editorA:emptyEditor(),editorB:emptyEditor(),permissionRequests:[],permissions:[],
+  editorA:emptyEditor(),editorB:emptyEditor(),sharedTerminal:emptyEditor(),permissionRequests:[],permissions:[],
   isExplainMode:false,explainPrimarySlot:'A',explainState:null,annotations:[],highlightedLines:[],
   isChatOpen:true,normalMessages:[],explainMessages:[],messages:[],
   createSession:async(language)=>{set({isLoading:true,error:null});try{const response=await roomsApi.create(language),room=await resolvePartnerProfile(response.room),result={...response,room};set({isLoading:false,room,documents:result.documents,roomId:room.id,roomCode:room.roomCode,language:room.language});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
@@ -134,21 +147,39 @@ export const useSessionStore=create<SessionState>((set,get)=>({
       set({room,documents:roomResponse.documents,roomId:room.id,roomCode:room.roomCode,
         language:room.language,currentSlot:current,questionA:room.questions.A??'',questionB:room.questions.B??'',
         timer:timerView(room.timer,serverTimeOffsetMs),serverTimeOffsetMs,partnerState:partner?.state==='connected'?'connected':'disconnected',
-        isPartnerOnline:partner?.state==='connected',permissions,permissionRequests:requests,editorA:editor('A'),editorB:editor('B'),
+        isPartnerOnline:partner?.state==='connected',partnerHasLeft:room.status==='ended'&&room.endedBy===partner?.userId,partnerIsTyping:false,
+        permissions,permissionRequests:requests,editorA:editor('A'),editorB:editor('B'),
         explainState:explain.state,isExplainMode:explain.state.active,explainPrimarySlot:explain.state.targetSlot??current??'A',
         annotations:explain.annotations,highlightedLines:explain.annotations.filter(a=>a.type==='highlight').flatMap(a=>a.startLine?[a.startLine]:[]),
         normalMessages,explainMessages,messages:explain.state.active?explainMessages:normalMessages,isLoading:false})
       await socialApi.setPresence('IN_SESSION').catch(()=>undefined)
     }catch(error){if(error instanceof DOMException&&error.name==='AbortError')return;set({isLoading:false,error:safeError(error),connectionState:'offline'});throw error}
   },
-  setRealtimeConnection:(connectionState)=>set({connectionState,partnerState:connectionState==='reconnecting'?'reconnecting':get().partnerState}),
+  setRealtimeConnection:(connectionState)=>set({connectionState}),
   handleRoomEvent:(envelope)=>{
     if(envelope.roomId!==get().roomId)return
-    const event=envelope.event,key=`${event.type}:${event.occurredAt}:${'message'in event&&event.message?.id||''}`
+    const event=envelope.event
+    const eventIdentity='message'in event&&event.message?.id||'executionId'in event&&event.executionId||'userId'in event&&event.userId||''
+    const key=`${event.type}:${event.occurredAt}:${eventIdentity}`
     if(seenEvents.has(key))return;seenEvents.add(key);if(seenEvents.size>500)seenEvents.clear()
     if(event.type==='participant.connected'||event.type==='participant.disconnected'){
-      if(event.userId!==useAuthStore.getState().user?.id){set({partnerState:event.type==='participant.connected'?'connected':'disconnected',isPartnerOnline:event.type==='participant.connected'});if(event.type==='participant.connected'&&!get().room?.participants.some(p=>p.userId===event.userId))void get().hydrate(get().roomId).catch(()=>undefined)}
-    }else if(event.type==='session.ended')set({partnerState:'disconnected',isPartnerOnline:false,error:'Your partner ended this live session. The saved board remains in Recent Sessions.'})
+      if(event.userId!==useAuthStore.getState().user?.id){
+        if(partnerTypingTimer){clearTimeout(partnerTypingTimer);partnerTypingTimer=null}
+        set({partnerState:event.type==='participant.connected'?'connected':'disconnected',isPartnerOnline:event.type==='participant.connected',partnerIsTyping:false,partnerHasLeft:false})
+        if(event.type==='participant.connected'&&!get().room?.participants.some(p=>p.userId===event.userId))void get().hydrate(get().roomId).catch(()=>undefined)
+      }
+    }else if(event.type==='participant.typing'){
+      if(event.userId!==useAuthStore.getState().user?.id){
+        if(partnerTypingTimer)clearTimeout(partnerTypingTimer)
+        set({partnerIsTyping:event.isTyping})
+        if(event.isTyping)partnerTypingTimer=setTimeout(()=>{partnerTypingTimer=null;set({partnerIsTyping:false})},3000)
+      }
+    }else if(event.type==='session.ended'){
+      const partnerLeft=event.endedBy!==useAuthStore.getState().user?.id
+      if(partnerTypingTimer){clearTimeout(partnerTypingTimer);partnerTypingTimer=null}
+      set({partnerState:'disconnected',isPartnerOnline:false,partnerIsTyping:false,partnerHasLeft:partnerLeft,
+        error:partnerLeft?'Your partner left the live session. The saved board remains in Recent Sessions.':get().error})
+    }
     else if(event.type==='question.updated')set({[event.slot==='A'?'questionA':'questionB']:event.question??''})
     else if(event.type==='timer.started'||event.type==='timer.expired')set({timer:timerView(event.timer,get().serverTimeOffsetMs)})
     else if(event.type==='chat.message'){const value=chat(event.message,get().room);if(!get().normalMessages.some(m=>m.id===value.id)){const normalMessages=[...get().normalMessages,value];set({normalMessages,messages:get().isExplainMode?get().messages:normalMessages})}}
@@ -162,6 +193,11 @@ export const useSessionStore=create<SessionState>((set,get)=>({
       set({permissions,permissionRequests:requests});const current=get().currentSlot,userId=useAuthStore.getState().user?.id
       for(const slot of ['A','B'] as const){const owner=get().room?.participants.find(p=>p.slot===slot)?.userId;if(slot!==current&&owner===event.ownerId&&event.granteeId===userId)set({[slot==='A'?'editorA':'editorB']:{...get()[slot==='A'?'editorA':'editorB'],permission:event.permission?'granted':'none',permissionScope:event.permission?.scope}})}
     }
+    else if(event.type==='execution.started'&&event.scope==='explain')set({sharedTerminal:{...get().sharedTerminal,outputState:'running',stdout:'',stderr:'',isOutputOpen:true}})
+    else if(event.type==='execution.completed'&&event.scope==='explain'){
+      if(event.result)set({sharedTerminal:terminalResult(get().sharedTerminal,event.result)})
+      else set({sharedTerminal:{...get().sharedTerminal,outputState:'error',stderr:`Execution ended with ${event.status.replaceAll('_',' ')}.`,isOutputOpen:true}})
+    }
   },
   canWrite:(slot)=>{if(get().room?.status!=='waiting'&&get().room?.status!=='live')return false;if(slot===get().currentSlot)return true;const owner=get().room?.participants.find(p=>p.slot===slot)?.userId,user=useAuthStore.getState().user?.id;return get().permissions.some(p=>p.editorOwnerId===owner&&p.granteeId===user&&!p.revokedAt&&!p.consumedAt)},
   setTimer:async(minutes)=>{try{const{timer}=await roomsApi.startTimer(get().roomId,minutes*60);set({timer:timerView(timer,get().serverTimeOffsetMs)})}catch(error){set({error:safeError(error)})}},
@@ -170,7 +206,24 @@ export const useSessionStore=create<SessionState>((set,get)=>({
   setQuestion:(slot,text)=>{if(slot!==get().currentSlot||(get().room?.status!=='waiting'&&get().room?.status!=='live'))return;set({[slot==='A'?'questionA':'questionB']:text,questionSaveState:'saving'});if(questionTimer)clearTimeout(questionTimer);questionTimer=setTimeout(async()=>{try{const result=await roomsApi.question(get().roomId,text.trim()||null);set({room:preservePartnerProfile(result.room,get().room),questionSaveState:'saved'})}catch(error){set({questionSaveState:'error',error:safeError(error)})}},650)},
   toggleOutput:(slot)=>{const key=slot==='A'?'editorA':'editorB';set({[key]:{...get()[key],isOutputOpen:!get()[key].isOutputOpen}})},
   setStdin:(slot,stdin)=>{const key=slot==='A'?'editorA':'editorB';set({[key]:{...get()[key],stdin}})},
-  runCode:async(slot,source)=>{const key=slot==='A'?'editorA':'editorB',editor=get()[key];if(editor.outputState==='running')return;set({[key]:{...editor,outputState:'running',isOutputOpen:true,stdout:'',stderr:''}});try{const result=await executionApi.run(get().roomId,{language:get().language,source,stdin:get()[key].stdin});const stderr=[result.compileOutput,result.stderr].filter(Boolean).join('\n')||(result.status==='completed'?'':`Execution ended with ${result.status.replaceAll('_',' ')}.`);set({[key]:{...get()[key],outputState:result.status==='completed'?'success':result.status==='compile_error'?'compile_error':'error',stdout:result.stdout,stderr}})}catch(error){set({[key]:{...get()[key],outputState:'error',stderr:safeError(error)},error:safeError(error)})}},
+  setSharedStdin:(stdin)=>set({sharedTerminal:{...get().sharedTerminal,stdin}}),
+  runCode:async(slot,source)=>{
+    const shared=get().isExplainMode
+    const key=slot==='A'?'editorA':'editorB'
+    const terminal=shared?get().sharedTerminal:get()[key]
+    if(terminal.outputState==='running')return
+    if(shared)set({sharedTerminal:{...terminal,outputState:'running',isOutputOpen:true,stdout:'',stderr:''}})
+    else set({[key]:{...terminal,outputState:'running',isOutputOpen:true,stdout:'',stderr:''}})
+    try{
+      const result=await executionApi.run(get().roomId,{language:get().language,source,stdin:terminal.stdin,scope:shared?'explain':'personal'})
+      if(shared)set({sharedTerminal:terminalResult(get().sharedTerminal,result)})
+      else set({[key]:terminalResult(get()[key],result)})
+    }catch(error){
+      const message=safeError(error)
+      if(shared)set({sharedTerminal:{...get().sharedTerminal,outputState:'error',stderr:message,isOutputOpen:true},error:message})
+      else set({[key]:{...get()[key],outputState:'error',stderr:message},error:message})
+    }
+  },
   requestEditAccess:async(slot)=>{const owner=get().room?.participants.find(p=>p.slot===slot)?.userId;if(!owner)return;try{const result=await roomsApi.requestPermission(get().roomId,owner) as {permissionRequest:PermissionRequest};set({permissionRequests:[...get().permissionRequests.filter(r=>r.id!==result.permissionRequest.id),result.permissionRequest],[slot==='A'?'editorA':'editorB']:{...get()[slot==='A'?'editorA':'editorB'],permission:'pending'}})}catch(error){set({error:safeError(error)})}},
   resolvePermission:async(decision)=>{const user=useAuthStore.getState().user?.id;const request=get().permissionRequests.find(r=>r.editorOwnerId===user&&r.status==='pending');if(!request)return;try{await roomsApi.resolvePermission(get().roomId,request.id,decision==='deny'?'deny':'grant',decision==='grant_once'?'once':decision==='grant_session'?'session':undefined);const state=await roomsApi.permissions(get().roomId);set({permissionRequests:state.requests,permissions:state.permissions})}catch(error){set({error:safeError(error)})}},
   revokePermission:async(granteeId)=>{try{await roomsApi.revokePermission(get().roomId,granteeId);set({permissions:get().permissions.filter(p=>p.granteeId!==granteeId)})}catch(error){set({error:safeError(error)})}},
@@ -179,7 +232,8 @@ export const useSessionStore=create<SessionState>((set,get)=>({
   removeAnnotation:async(id)=>{try{await collaborationApi.removeAnnotation(get().roomId,id);set({annotations:get().annotations.filter(a=>a.id!==id)})}catch(error){set({error:safeError(error)})}},
   toggleChat:()=>set({isChatOpen:!get().isChatOpen}),
   sendMessage:async(text)=>{try{if(get().isExplainMode){const result=await collaborationApi.sendExplain(get().roomId,text) as {message:ExplainMessage};const value=explainChat(result.message,get().room);if(!get().explainMessages.some(m=>m.id===value.id))set({explainMessages:[...get().explainMessages,value],messages:[...get().messages,value]})}else{const{message}=await collaborationApi.sendChat(get().roomId,text);const value=chat(message,get().room);if(!get().normalMessages.some(m=>m.id===value.id))set({normalMessages:[...get().normalMessages,value],messages:[...get().messages,value]})}}catch(error){set({error:safeError(error)})}},
-  leaveSession:async()=>{try{await roomsApi.leave(get().roomId);await socialApi.setPresence('ONLINE').catch(()=>undefined)}catch(error){set({error:safeError(error)});throw error}},
+  setTyping:async(isTyping)=>{if(!get().roomId)return;try{await roomsApi.typing(get().roomId,isTyping)}catch{/* Ephemeral typing must never block chat or navigation. */}},
+  leaveSession:async()=>{try{await get().setTyping(false);await roomsApi.leave(get().roomId);await socialApi.setPresence('ONLINE').catch(()=>undefined)}catch(error){set({error:safeError(error)});throw error}},
   exportSession:async()=>{try{const{blob,filename}=await collaborationApi.export(get().roomId);const url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=filename;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),0)}catch(error){set({error:safeError(error)});throw error}},
   clearError:()=>set({error:null}),
 }))

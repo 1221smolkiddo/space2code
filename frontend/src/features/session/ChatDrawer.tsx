@@ -1,16 +1,37 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSessionStore } from '../../store/sessionStore';
 import { useAuthStore } from '../../store/authStore';
 import { MessageSquare, Send, ChevronRight } from 'lucide-react';
+import { participantName } from '../../utils/participantName';
 
 export const ChatDrawer: React.FC = () => {
-  const { isChatOpen, toggleChat, messages, sendMessage, isExplainMode } = useSessionStore();
+  const { isChatOpen, toggleChat, messages, sendMessage, isExplainMode, room, partnerIsTyping, setTyping } = useSessionStore();
   const { user } = useAuthStore();
   const [inputText, setInputText] = useState('');
+  const idleTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
+  const typingSent = useRef(false);
+  const partnerId=room?.partner?.userId??room?.participants.find((participant)=>participant.userId!==user?.id)?.userId;
+  const partnerDisplayName=partnerId?participantName(room,partnerId,user?.id):'Partner';
+
+  const stopTyping=useCallback(()=>{
+    if(idleTimer.current){clearTimeout(idleTimer.current);idleTimer.current=null;}
+    if(typingSent.current){typingSent.current=false;void setTyping(false);}
+  },[setTyping]);
+
+  useEffect(()=>()=>stopTyping(),[stopTyping]);
+
+  const handleInputChange=(value:string)=>{
+    setInputText(value);
+    if(!value.trim()){stopTyping();return;}
+    if(!typingSent.current){typingSent.current=true;void setTyping(true);}
+    if(idleTimer.current)clearTimeout(idleTimer.current);
+    idleTimer.current=setTimeout(stopTyping,1200);
+  };
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
     if (inputText.trim()) {
+      stopTyping();
       void sendMessage(inputText);
       setInputText('');
     }
@@ -161,6 +182,11 @@ export const ChatDrawer: React.FC = () => {
       </div>
 
       {/* Chat Input Bar */}
+      {partnerIsTyping && (
+        <div role="status" aria-live="polite" style={{padding:'0.35rem 0.75rem 0',fontSize:'0.72rem',color:'var(--text-muted)',fontStyle:'italic'}}>
+          {partnerDisplayName} is typing…
+        </div>
+      )}
       <form
         onSubmit={handleSend}
         style={{
@@ -175,7 +201,7 @@ export const ChatDrawer: React.FC = () => {
           type="text"
           placeholder="Message partner..."
           value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
+          onChange={(e) => handleInputChange(e.target.value)}
           style={{
             flex: 1,
             padding: '0.45rem 0.65rem',

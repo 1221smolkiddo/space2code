@@ -40,4 +40,24 @@ describe('realtime document names', () => {
     expect((await service.get(userA, room.id)).participants[0]?.state).toBe('disconnected')
     presence.destroy()
   })
+
+  it('cancels the pending offline event when a participant reconnects inside the grace period', async () => {
+    vi.useFakeTimers()
+    const repository = new InMemoryRoomRepository()
+    const service = new RoomService(repository)
+    const userA = '00000000-0000-4000-8000-000000000001'
+    const room = await service.create(userA, 'typescript')
+    const events:string[]=[]
+    const presence = new PresenceTracker(repository, 5_000, {publish:async(_roomId,event)=>{events.push(event.type)}})
+
+    await presence.connect(room.id,userA)
+    presence.disconnect(room.id,userA)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await presence.connect(room.id,userA)
+    await vi.advanceTimersByTimeAsync(5_001)
+
+    expect((await service.get(userA,room.id)).participants[0]?.state).toBe('connected')
+    expect(events).not.toContain('participant.disconnected')
+    presence.destroy()
+  })
 })

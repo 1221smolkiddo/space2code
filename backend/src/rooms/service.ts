@@ -3,6 +3,7 @@ import { randomInt, randomUUID } from 'node:crypto'
 import type { ChatMessage, ExplainAnnotation, ExplainMessage, ExplainState } from '../collaboration/types.js'
 import { RoomError } from './errors.js'
 import type { RoomRepository } from './repository.js'
+import type { ExecutionResult } from '../execution/types.js'
 import type { PermissionScope, RecentSession, Room, SessionTimer } from './types.js'
 
 const roomCodeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -20,12 +21,13 @@ export interface RoomEventPublisher {
 export type RoomEvent =
   | { type: 'participant.connected'; occurredAt: string; userId: string }
   | { type: 'participant.disconnected'; occurredAt: string; userId: string }
+  | { type: 'participant.typing'; occurredAt: string; userId: string; isTyping: boolean }
   | { type: 'session.ended'; occurredAt: string; endedBy: string; reason: string }
   | { type: 'question.updated'; occurredAt: string; slot: 'A' | 'B'; question: string | null }
   | { type: 'timer.started'; occurredAt: string; timer: SessionTimer }
   | { type: 'timer.expired'; occurredAt: string; timer: SessionTimer }
-  | { type: 'execution.started'; occurredAt: string; executionId: string; userId: string }
-  | { type: 'execution.completed'; occurredAt: string; executionId: string; userId: string; status: string }
+  | { type: 'execution.started'; occurredAt: string; executionId: string; userId: string; scope: 'personal' | 'explain' }
+  | { type: 'execution.completed'; occurredAt: string; executionId: string; userId: string; status: string; scope: 'personal' | 'explain'; result?: ExecutionResult }
   | { type: 'chat.message'; occurredAt: string; message: ChatMessage }
   | { type: 'explain.state'; occurredAt: string; state: ExplainState; winnerId: string }
   | { type: 'explain.arbitrated'; occurredAt: string; state: ExplainState; winnerId: string }
@@ -110,6 +112,15 @@ export class RoomService {
       endedBy: userId, reason: room.endedReason ?? 'partner_left',
     })
     return room
+  }
+
+  async setTyping(userId: string, roomId: string, isTyping: boolean): Promise<void> {
+    const room = await this.repository.findForUser(roomId, userId)
+    if (!room) throw new RoomError('NOT_A_PARTICIPANT', 'Session membership is required')
+    if (room.status !== 'waiting' && room.status !== 'live') return
+    await this.events.publish(roomId, {
+      type: 'participant.typing', occurredAt: this.clock.now().toISOString(), userId, isTyping,
+    })
   }
 
   async recent(userId: string): Promise<RecentSession[]> {

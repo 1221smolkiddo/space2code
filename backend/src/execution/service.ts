@@ -20,6 +20,7 @@ export interface ExecuteInput {
   language: string
   source: string
   stdin: string
+  scope?: 'personal' | 'explain'
 }
 
 const systemClock: Clock = { now: () => new Date() }
@@ -37,6 +38,7 @@ export class ExecutionService {
   ) {}
 
   async execute(input: ExecuteInput): Promise<ExecutionResult> {
+    const scope = input.scope ?? 'personal'
     const room = await this.repository.findForUser(input.roomId, input.userId)
     if (!room) throw new RoomError('NOT_A_PARTICIPANT', 'Session membership is required for execution')
     if (room.status !== 'live') throw new RoomError('INVALID_ROOM_STATE', 'Execution requires a live session')
@@ -57,6 +59,7 @@ export class ExecutionService {
     const lease = await this.guard.acquire(input.roomId, input.userId, started)
     await this.events.publish(input.roomId, {
       type: 'execution.started', occurredAt: started.toISOString(), executionId: lease.id, userId: input.userId,
+      scope,
     })
     await this.repository.touchActivity(input.roomId, started.toISOString())
 
@@ -79,7 +82,8 @@ export class ExecutionService {
       outcome = 'completed'
       await this.events.publish(input.roomId, {
         type: 'execution.completed', occurredAt: this.clock.now().toISOString(),
-        executionId: lease.id, userId: input.userId, status: result.status,
+        executionId: lease.id, userId: input.userId, status: result.status, scope,
+        ...(scope === 'explain' ? { result } : {}),
       })
       return result
     } catch (error) {
@@ -87,6 +91,7 @@ export class ExecutionService {
         await this.events.publish(input.roomId, {
           type: 'execution.completed', occurredAt: this.clock.now().toISOString(),
           executionId: lease.id, userId: input.userId, status: 'timed_out',
+          scope,
         })
         throw new ExecutionError('EXECUTION_TIMED_OUT', 'Execution exceeded the backend timeout')
       }
@@ -96,6 +101,7 @@ export class ExecutionService {
       await this.events.publish(input.roomId, {
         type: 'execution.completed', occurredAt: this.clock.now().toISOString(),
         executionId: lease.id, userId: input.userId, status,
+        scope,
       })
       if (error instanceof ExecutionError) throw error
       throw new ExecutionError('EXECUTION_PROVIDER_UNAVAILABLE', 'Execution provider is unavailable')

@@ -15,6 +15,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { confirmExplicitLeave } from './leaveConfirmation';
 
 const LANGUAGES = [
   {value:'python',label:'Python'}, {value:'javascript',label:'JavaScript'},
@@ -286,7 +287,7 @@ export const SessionHeader: React.FC = () => {
           {isExplainMode ? 'Exit Explain' : 'Explain Mode'}
         </button>
         <button onClick={() => void exportSession().catch(()=>undefined)} className="btn-ghost" title="Export retained session"><Download size={15}/></button>
-        <button onClick={() => { if(window.confirm('Exit this live session? Your partner will be disconnected, and the saved work will remain in Recent Sessions.')) void leaveSession().then(()=>navigate('/home')).catch(()=>undefined) }} className="btn-ghost" title="Exit session"><LogOut size={15}/></button>
+        <button onClick={() => { if(confirmExplicitLeave()) void leaveSession().then(()=>navigate('/home')).catch(()=>undefined) }} className="btn-ghost" title="Exit session"><LogOut size={15}/></button>
       </div>
       {error && <div role="alert" className="session-error-strip">{error}</div>}
     </header>

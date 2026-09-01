@@ -10,6 +10,7 @@ import { useAuthStore } from '../../store/authStore';
 import { env } from '../../config/env';
 import { getAccessToken } from '../../api/client';
 import type { RoomEventEnvelope } from '../../types';
+import { editorDocumentName } from '../../realtime/editorDocument';
 import { OutputDrawer } from './OutputDrawer';
 import { WashiTape } from '../../components/doodles/WashiTape';
 import { 
@@ -17,7 +18,6 @@ import {
   Terminal, 
   Lock, 
   Unlock, 
-  UserCheck, 
   Loader2 
 } from 'lucide-react';
 
@@ -28,6 +28,14 @@ interface EditorPanelProps {
   isOwner: boolean;
   isPartnerOnline: boolean;
   language: string;
+}
+
+interface RealtimeBinding {
+  documentName: string;
+  provider: HocuspocusProvider;
+  doc: Y.Doc;
+  binding: MonacoBinding;
+  awarenessLabels: HTMLStyleElement[];
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
@@ -42,13 +50,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     editorA, 
     editorB, 
     toggleOutput, 
+    setStdin,
     runCode, 
     requestEditAccess, 
     resolvePermission,
     isExplainMode,
+    sharedTerminal,
     explainPrimarySlot,
     toggleExplainMode,
-    documents,
+    roomId,
     handleRoomEvent,
     setRealtimeConnection,
     canWrite,
@@ -63,7 +73,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   const { fontSize } = useThemeStore();
   const { user } = useAuthStore();
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
-  const realtimeRef = useRef<{ provider:HocuspocusProvider;doc:Y.Doc;binding:MonacoBinding } | null>(null);
+  const realtimeRef = useRef<RealtimeBinding | null>(null);
 
   const state = slot === 'A' ? editorA : editorB;
   const isWritable = canWrite(slot);
@@ -71,11 +81,22 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   const pendingForOwner = permissionRequests.find((request) => request.editorOwnerId === user?.id && request.status === 'pending');
   const activeGrant = permissions.find((permission) => permission.editorOwnerId === user?.id && !permission.revokedAt && !permission.consumedAt);
 
-  const mountEditor = useCallback((editor:MonacoEditor.IStandaloneCodeEditor) => {
-    editorRef.current=editor;
-    const name=slot==='A'?documents?.userA:documents?.userB;
+  const destroyRealtime = useCallback(() => {
+    const realtime=realtimeRef.current;
+    if(!realtime)return;
+    realtimeRef.current=null;
+    realtime.awarenessLabels.forEach(style=>style.remove());
+    realtime.binding.destroy();
+    realtime.provider.destroy();
+    realtime.doc.destroy();
+  },[]);
+
+  const attachRealtime = useCallback((editor:MonacoEditor.IStandaloneCodeEditor) => {
     if(!env.realtimeReady){setRealtimeConnection('offline');return}
-    if(!name||!ownerId||realtimeRef.current)return;
+    if(!roomId||!ownerId)return;
+    const name=editorDocumentName(roomId,slot);
+    if(realtimeRef.current?.documentName===name)return;
+    destroyRealtime();
     const doc=new Y.Doc();
     let awarenessLabels:HTMLStyleElement[]=[];
     const provider=new HocuspocusProvider({
@@ -95,16 +116,25 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
       },
       onDestroy:()=>{awarenessLabels.forEach(style=>style.remove());awarenessLabels=[]},
     });
-    provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:currentSlot==='A'?'#8ca47e':'#d69a5c'});
     const model=editor.getModel();
-    if(!model)return;
+    if(!model){provider.destroy();doc.destroy();return}
     const binding=new MonacoBinding(doc.getText('code'),model,new Set([editor]),provider.awareness);
-    realtimeRef.current={provider,doc,binding};
-  },[currentSlot,documents,handleRoomEvent,ownerId,setRealtimeConnection,slot,user?.displayName,user?.id]);
+    realtimeRef.current={documentName:name,provider,doc,binding,awarenessLabels};
+    provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:currentSlot==='A'?'#8ca47e':'#d69a5c'});
+  },[currentSlot,destroyRealtime,handleRoomEvent,ownerId,roomId,setRealtimeConnection,slot,user?.displayName,user?.id]);
 
-  useEffect(()=>{if(editorRef.current&&ownerId&&!realtimeRef.current)mountEditor(editorRef.current)},[mountEditor,ownerId]);
+  const mountEditor = useCallback((editor:MonacoEditor.IStandaloneCodeEditor) => {
+    editorRef.current=editor;
+    attachRealtime(editor);
+  },[attachRealtime]);
 
-  useEffect(()=>()=>{realtimeRef.current?.binding.destroy();realtimeRef.current?.provider.destroy();realtimeRef.current?.doc.destroy();realtimeRef.current=null;editorRef.current=null},[documents,slot]);
+  useEffect(()=>{if(editorRef.current)attachRealtime(editorRef.current)},[attachRealtime]);
+
+  useEffect(()=>{
+    realtimeRef.current?.provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:currentSlot==='A'?'#8ca47e':'#d69a5c'});
+  },[currentSlot,user?.displayName,user?.id]);
+
+  useEffect(()=>()=>{destroyRealtime();editorRef.current=null},[destroyRealtime]);
 
   useEffect(()=>{
     const editor=editorRef.current;if(!editor)return;
@@ -258,11 +288,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           </div>
 
           {/* Write Permission Badge */}
-          {isOwner ? (
-            <span style={{ fontSize: '0.7rem', color: 'var(--sage)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.2rem', marginLeft: '0.25rem' }}>
-              <UserCheck size={12} /> owner
-            </span>
-          ) : isWritable ? (
+          {isWritable ? (
             <span style={{ fontSize: '0.7rem', color: 'var(--sage)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
               <Unlock size={12} /> editable
             </span>
@@ -333,7 +359,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           )}
           <button
             onClick={handleRun}
-            disabled={state.outputState === 'running'}
+            disabled={(isExplainMode ? sharedTerminal.outputState : state.outputState) === 'running'}
             className="btn btn-outline"
             style={{
               padding: '0.25rem 0.65rem',
@@ -345,7 +371,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             }}
             title="Run Code (Executes on your desk)"
           >
-            {state.outputState === 'running' ? (
+            {(isExplainMode ? sharedTerminal.outputState : state.outputState) === 'running' ? (
               <Loader2 size={13} className="animate-spin" />
             ) : (
               <Play size={13} fill="currentColor" />
@@ -353,18 +379,20 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             Run
           </button>
 
-          <button
-            onClick={() => toggleOutput(slot)}
-            className={`btn ${state.isOutputOpen ? 'btn-primary' : 'btn-ghost'}`}
-            style={{
-              padding: '0.25rem 0.5rem',
-              fontSize: '0.75rem',
-              borderRadius: 'var(--radius-sm)',
-            }}
-            title="Toggle Console Output"
-          >
-            <Terminal size={14} />
-          </button>
+          {!isExplainMode && (
+            <button
+              onClick={() => toggleOutput(slot)}
+              className={`btn ${state.isOutputOpen ? 'btn-primary' : 'btn-ghost'}`}
+              style={{
+                padding: '0.25rem 0.5rem',
+                fontSize: '0.75rem',
+                borderRadius: 'var(--radius-sm)',
+              }}
+              title="Toggle Console Output"
+            >
+              <Terminal size={14} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -393,12 +421,13 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
       </div>
 
       {/* Output Console Drawer */}
-      {state.isOutputOpen && (
+      {!isExplainMode && state.isOutputOpen && (
         <OutputDrawer
-          slot={slot}
+          title={isOwner ? 'Your Terminal' : `${username}'s Terminal`}
           state={state}
           onClose={() => toggleOutput(slot)}
           onRun={handleRun}
+          onStdinChange={(value) => setStdin(slot,value)}
         />
       )}
     </div>

@@ -9,6 +9,7 @@ const executeSchema = z.object({
   language: z.string().min(1),
   source: z.string(),
   stdin: z.string().optional().default(''),
+  scope: z.enum(['personal', 'explain']).optional().default('personal'),
 })
 
 export async function registerExecutionRoutes(

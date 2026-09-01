@@ -6,6 +6,7 @@ import { SessionHeader } from './SessionHeader';
 import { EditorPanel } from './EditorPanel';
 import { QuestionSheet } from './QuestionSheet';
 import { ChatDrawer } from './ChatDrawer';
+import { OutputDrawer } from './OutputDrawer';
 import { participantName } from '../../utils/participantName';
 
 export const SessionPage: React.FC = () => {
@@ -14,10 +15,15 @@ export const SessionPage: React.FC = () => {
     hydrate,
     language, 
     isPartnerOnline,
+    partnerState,
+    partnerHasLeft,
     currentSlot,
     room,
     isLoading,
     error,
+    isExplainMode,
+    sharedTerminal,
+    setSharedStdin,
   } = useSessionStore();
 
   const { user } = useAuthStore();
@@ -66,17 +72,25 @@ export const SessionPage: React.FC = () => {
         {/* Main Editors Row */}
         <div
           style={{
-            flex: 1,
-            display: 'flex',
-            height: '100%',
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
             overflow: 'hidden',
             position: 'relative',
           }}
-        >
+      >
+          {partnerId && (partnerHasLeft || partnerState !== 'connected') && (
+            <div role="status" style={{padding:'0.45rem 0.8rem',backgroundColor:partnerHasLeft?'var(--error-bg)':'var(--bg-secondary)',borderBottom:'1px solid var(--border-muted)',fontSize:'0.8rem',fontWeight:600,color:partnerHasLeft?'var(--error-color)':'var(--text-secondary)'}}>
+              {partnerHasLeft ? `${partnerName} left the session. The live session has ended.` : partnerState === 'reconnecting' ? 'Partner reconnecting…' : `${partnerName} is offline`}
+            </div>
+          )}
+
+          <div style={{flex:1,display:'flex',minHeight:0,overflow:'hidden'}}>
           {/* User A Editor Card (Owner) */}
           <EditorPanel
             slot="A"
-            username={currentSlot === 'A' ? user?.displayName || 'You' : partnerName}
+            username={currentSlot === 'A' ? 'You' : partnerName}
             partnerName={partnerName}
             isOwner={currentSlot === 'A'}
             isPartnerOnline={currentSlot === 'A' ? true : isPartnerOnline}
@@ -86,12 +100,21 @@ export const SessionPage: React.FC = () => {
           {/* User B Editor Card (Partner) */}
           <EditorPanel
             slot="B"
-            username={currentSlot === 'B' ? user?.displayName || 'You' : partnerName}
+            username={currentSlot === 'B' ? 'You' : partnerName}
             partnerName={partnerName}
             isOwner={currentSlot === 'B'}
             isPartnerOnline={currentSlot === 'B' ? true : isPartnerOnline}
             language={language}
           />
+          </div>
+
+          {isExplainMode && (
+            <OutputDrawer
+              title="Shared Terminal"
+              state={sharedTerminal}
+              onStdinChange={setSharedStdin}
+            />
+          )}
         </div>
 
         {/* Far-Right Chat Drawer (Dedicated flex child, zero overlap) */}

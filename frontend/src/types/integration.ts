@@ -12,6 +12,7 @@ export interface ExplainSnapshot { state:ExplainState;messages:ExplainMessage[];
 export interface PermissionSnapshot { requests: PermissionRequest[]; permissions: EditorPermission[] }
 export type RoomEvent =
   | {type:'participant.connected'|'participant.disconnected';occurredAt:string;userId:string}
+  | {type:'participant.typing';occurredAt:string;userId:string;isTyping:boolean}
   | {type:'session.ended';occurredAt:string;endedBy:string;reason:string}
   | {type:'question.updated';occurredAt:string;slot:Slot;question:string|null}
   | {type:'timer.started'|'timer.expired';occurredAt:string;timer:SessionTimer}
@@ -21,7 +22,8 @@ export type RoomEvent =
   | {type:'explain.annotation';occurredAt:string;annotation:ExplainAnnotation}
   | {type:'permission.requested';occurredAt:string;request:PermissionRequest}
   | {type:'permission.changed';occurredAt:string;ownerId:string;granteeId:string;permission:EditorPermission|null}
-  | {type:'execution.started'|'execution.completed';occurredAt:string;executionId:string;userId:string;status?:string}
+  | {type:'execution.started';occurredAt:string;executionId:string;userId:string;scope:'personal'|'explain'}
+  | {type:'execution.completed';occurredAt:string;executionId:string;userId:string;status:string;scope:'personal'|'explain';result?:ExecutionResult}
 export interface RoomEventEnvelope { version:1;roomId:string;event:RoomEvent }
 export type UserEvent = {type:string;[key:string]:unknown}
 export interface UserEventEnvelope {id:string;occurredAt:string;event:UserEvent}

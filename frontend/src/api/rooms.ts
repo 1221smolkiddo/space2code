@@ -6,6 +6,7 @@ export const roomsApi={
  get:(roomId:string,signal?:AbortSignal)=>apiRequest<RoomResponse>(`/v1/rooms/${roomId}`,{signal}),
  getWithClock:(roomId:string,signal?:AbortSignal)=>apiRequestWithMeta<RoomResponse>(`/v1/rooms/${roomId}`,{signal}),
  leave:(roomId:string)=>apiRequest<RoomResponse>(`/v1/rooms/${roomId}/leave`,{method:'POST'}),
+ typing:(roomId:string,isTyping:boolean)=>apiRequest<void>(`/v1/rooms/${roomId}/typing`,{method:'PUT',body:{isTyping}}),
  recent:(signal?:AbortSignal)=>apiRequest<{sessions:RecentSession[]}>('/v1/sessions/recent',{signal}),
  resume:(sessionId:string)=>apiRequest<RoomResponse>(`/v1/sessions/${sessionId}/resume`,{method:'POST'}),
  question:(roomId:string,question:string|null)=>apiRequest<RoomResponse>(`/v1/rooms/${roomId}/question`,{method:'PATCH',body:{question}}),
