@@ -2,12 +2,12 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSocialStore } from '../../store/socialStore';
 import { PushPinDoodle } from '../../components/doodles/DoodleAccents';
-import { ArrowRight, Download, RotateCcw } from 'lucide-react';
+import { ArrowRight, Download, RotateCcw, Trash2 } from 'lucide-react';
 import { collaborationApi } from '../../api/collaboration';
 import type { RecentSession } from '../../types';
 
 export const RecentSessions: React.FC = () => {
-  const { recentSessions, resumeSession, isLoading } = useSocialStore();
+  const { recentSessions, resumeSession, removeRecentSession, isLoading } = useSocialStore();
   const navigate = useNavigate();
 
   const handleResume = async (session: RecentSession) => {
@@ -17,6 +17,7 @@ export const RecentSessions: React.FC = () => {
     } catch { /* social store renders a safe error */ }
   };
   const handleExport=async(sessionId:string)=>{try{const{blob,filename}=await collaborationApi.export(sessionId);const url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=filename;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),0)}catch(error){useSocialStore.setState({error:error instanceof Error?error.message:'Could not export this saved session.'})}};
+  const handleRemove=async(event:React.MouseEvent,session:RecentSession)=>{event.stopPropagation();if(!window.confirm('Remove this session from your Recent Sessions? Your partner\'s history and the shared session will not be deleted.'))return;try{await removeRecentSession(session.sessionId)}catch{/* social store renders a safe error */}};
   const lastActive=(value:string)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(value));
   const expiry=(value:string)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(value));
 
@@ -42,6 +43,11 @@ export const RecentSessions: React.FC = () => {
           gap: '1.25rem',
         }}
       >
+        {!recentSessions.length&&!isLoading&&(
+          <div className="paper-note" style={{padding:'1.25rem',color:'var(--text-muted)',fontSize:'0.85rem'}}>
+            No recent sessions yet.
+          </div>
+        )}
         {recentSessions.map((session) => {
           const isLive = session.status === 'live';
           return (
@@ -57,7 +63,8 @@ export const RecentSessions: React.FC = () => {
               }}
             >
               {/* Pushpin on top right */}
-              <div style={{ position: 'absolute', top: '8px', right: '12px' }}>
+              <div style={{ position: 'absolute', top: '8px', right: '12px',display:'flex',alignItems:'center',gap:'0.35rem' }}>
+                <button onClick={(event)=>void handleRemove(event,session)} className="btn-ghost" style={{padding:'0.2rem',color:'var(--text-muted)'}} title="Remove from Recent Sessions" aria-label={`Remove session with ${session.partner?.displayName||'Solo Scratchpad'} from Recent Sessions`}><Trash2 size={13}/></button>
                 <PushPinDoodle 
                   size={18} 
                   color={isLive ? 'var(--warm-accent)' : 'var(--border-strong)'} 

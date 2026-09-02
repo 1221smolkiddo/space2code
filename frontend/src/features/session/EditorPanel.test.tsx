@@ -7,6 +7,7 @@ interface ProviderOptions {
   document: { getText:(name:string)=>unknown }
   onStatus?: (payload:{status:string})=>void
   onDestroy?: ()=>void
+  onAwarenessChange?: (payload:{states:Array<{clientId:number;user?:{id?:string;name?:string};typing?:boolean}>})=>void
 }
 interface ProviderRecord {
   options: ProviderOptions
@@ -15,8 +16,7 @@ interface ProviderRecord {
 }
 
 const mocks=vi.hoisted(()=>({
-  providers:[] as ProviderRecord[],bindings:[] as {destroy:ReturnType<typeof vi.fn>}[],
-  editor:{getModel:vi.fn(()=>({})),getValue:vi.fn(()=>''),getSelection:vi.fn(),deltaDecorations:vi.fn(()=>[])},
+  providers:[] as ProviderRecord[],bindings:[] as {destroy:ReturnType<typeof vi.fn>;text:unknown;model:unknown;editors:unknown}[],editors:[] as Array<{getModel:ReturnType<typeof vi.fn>;getValue:ReturnType<typeof vi.fn>;getSelection:ReturnType<typeof vi.fn>;deltaDecorations:ReturnType<typeof vi.fn>}>,
 }))
 
 vi.mock('@hocuspocus/provider',()=>({HocuspocusProvider:class{
@@ -27,12 +27,14 @@ vi.mock('@hocuspocus/provider',()=>({HocuspocusProvider:class{
 }}))
 vi.mock('y-monaco',()=>({MonacoBinding:class{
   destroy=vi.fn()
-  constructor(){mocks.bindings.push(this)}
+  text:unknown;model:unknown;editors:unknown
+  constructor(text:unknown,model:unknown,editors:unknown){this.text=text;this.model=model;this.editors=editors;mocks.bindings.push(this)}
 }}))
 vi.mock('@monaco-editor/react',async()=>{
   const React=await import('react')
-  function MockMonacoEditor({onMount,options}:{onMount:(editor:typeof mocks.editor)=>void;options:{readOnly:boolean}}){
-    React.useEffect(()=>{onMount(mocks.editor)},[onMount])
+  function MockMonacoEditor({onMount,options}:{onMount:(editor:(typeof mocks.editors)[number])=>void;options:{readOnly:boolean}}){
+    const editor=React.useMemo(()=>{const model={id:`model-${mocks.editors.length}`};const value={getModel:vi.fn(()=>model),getValue:vi.fn(()=>''),getSelection:vi.fn(),deltaDecorations:vi.fn(()=>[])};mocks.editors.push(value);return value},[])
+    React.useEffect(()=>{onMount(editor)},[editor,onMount])
     return React.createElement('div',{'data-testid':'monaco','data-readonly':String(options.readOnly)})
   }
   return {default:MockMonacoEditor}
@@ -52,7 +54,7 @@ const roomId='10000000-0000-4000-8000-000000000001'
 const room:Room={id:roomId,roomCode:'ABC234',language:'python',status:'live',createdBy:userA,endedBy:null,endedReason:null,createdAt:'2026-08-30T10:00:00Z',lastActiveAt:'2026-08-30T10:00:00Z',startedAt:'2026-08-30T10:00:00Z',endedAt:null,expiresAt:'2026-08-31T10:00:00Z',resumedFromSessionId:null,resumePartnerId:null,questions:{A:null,B:null},timer:{status:'not_started',durationSeconds:null,startedAt:null,endsAt:null,startedBy:null},participants:[{userId:userA,slot:'A',state:'connected',joinedAt:'2026-08-30T10:00:00Z',lastConnectedAt:null,lastDisconnectedAt:null,leftAt:null},{userId:userB,slot:'B',state:'connected',joinedAt:'2026-08-30T10:00:00Z',lastConnectedAt:null,lastDisconnectedAt:null,leftAt:null}],partner:{userId:userB,displayName:'Grace',avatarUrl:null}}
 
 beforeEach(()=>{
-  vi.clearAllMocks();mocks.providers.length=0;mocks.bindings.length=0
+  vi.clearAllMocks();mocks.providers.length=0;mocks.bindings.length=0;mocks.editors.length=0
   useSessionStore.setState({isExplainMode:false,sharedTerminal:{...useSessionStore.getState().sharedTerminal,outputState:'idle'},editorA:{...useSessionStore.getState().editorA,isOutputOpen:false},editorB:{...useSessionStore.getState().editorB,isOutputOpen:false}})
 })
 
@@ -65,6 +67,20 @@ const renderPartnerDesk=(slot:Slot)=>{
 }
 
 describe('EditorPanel realtime lifecycle',()=>{
+  it('carries ephemeral partner typing over authenticated Desk A awareness',()=>{
+    useAuthStore.setState({user:{id:userA,email:'ada@example.com',displayName:'Ada',avatarUrl:null}})
+    useSessionStore.setState({room,roomId,currentSlot:'A',partnerIsTyping:false,permissions:[],permissionRequests:[]})
+    const rendered=render(<EditorPanel slot="A" username="You" partnerName="Grace" isOwner isPartnerOnline language="python" />)
+    const provider=mocks.providers[0]!
+    act(()=>provider.options.onAwarenessChange?.({states:[{clientId:2,user:{id:userB,name:'Grace'},typing:true}]}))
+    expect(useSessionStore.getState().partnerIsTyping).toBe(true)
+    act(()=>provider.options.onAwarenessChange?.({states:[]}))
+    expect(useSessionStore.getState().partnerIsTyping).toBe(false)
+    void useSessionStore.getState().setTyping(true)
+    expect(provider.awareness.setLocalStateField).toHaveBeenCalledWith('typing',true)
+    rendered.unmount()
+  })
+
   it('labels personal terminals by viewer identity and never shows an owner badge',()=>{
     useAuthStore.setState({user:{id:userA,email:'ada@example.com',displayName:'Ada',avatarUrl:null}})
     useSessionStore.setState({room,roomId,currentSlot:'A',isExplainMode:false,editorA:{...useSessionStore.getState().editorA,isOutputOpen:true},editorB:{...useSessionStore.getState().editorB,isOutputOpen:true},permissions:[],permissionRequests:[]})
@@ -92,6 +108,7 @@ describe('EditorPanel realtime lifecycle',()=>{
       act(()=>useSessionStore.setState({permissions:[permission]}))
       expect(screen.getByTestId('monaco')).toHaveAttribute('data-readonly','false')
       expect(mocks.providers).toHaveLength(1)
+      expect(mocks.bindings).toHaveLength(1)
       expect(mocks.providers[0]!.options.document).toBe(doc)
 
       act(()=>provider.options.onStatus?.({status:'reconnecting'}))
@@ -99,15 +116,37 @@ describe('EditorPanel realtime lifecycle',()=>{
       expect(mocks.providers).toHaveLength(1)
       expect(mocks.providers[0]!.options.document).toBe(doc)
 
+      act(()=>useSessionStore.setState({isExplainMode:true,explainPrimarySlot:slot==='A'?'B':'A'}))
+      expect(mocks.bindings).toHaveLength(1)
+      expect(binding.destroy).toHaveBeenCalledTimes(1)
+      expect(provider.destroy).not.toHaveBeenCalled()
+      act(()=>useSessionStore.setState({isExplainMode:false}))
+      expect(screen.getByTestId('monaco')).toHaveAttribute('data-readonly','false')
+      expect(mocks.bindings).toHaveLength(2)
+      expect(mocks.bindings[1]!.text).toBe(mocks.bindings[0]!.text)
+
       act(()=>useSessionStore.setState({permissions:[]}))
       expect(screen.getByTestId('monaco')).toHaveAttribute('data-readonly','true')
       expect(mocks.providers).toHaveLength(1)
       expect(provider.destroy).not.toHaveBeenCalled()
-      expect(binding.destroy).not.toHaveBeenCalled()
+      expect(mocks.bindings[1]!.destroy).not.toHaveBeenCalled()
+
+      act(()=>useSessionStore.setState({isExplainMode:true,explainPrimarySlot:slot==='A'?'B':'A'}))
+      expect(screen.queryByTestId('monaco')).not.toBeInTheDocument()
+      expect(mocks.bindings[1]!.destroy).toHaveBeenCalledTimes(1)
+      expect(provider.destroy).not.toHaveBeenCalled()
+      expect(useSessionStore.getState().currentSlot).toBe(slot==='A'?'B':'A')
+
+      act(()=>useSessionStore.setState({isExplainMode:false}))
+      expect(screen.getByTestId('monaco')).toHaveAttribute('data-readonly','true')
+      expect(mocks.providers).toHaveLength(1)
+      expect(mocks.providers[0]!.options.document).toBe(doc)
+      expect(mocks.bindings).toHaveLength(3)
+      expect(mocks.bindings[2]!.text).toBe(mocks.bindings[0]!.text)
 
       rendered.unmount()
       expect(provider.destroy).toHaveBeenCalledTimes(1)
-      expect(binding.destroy).toHaveBeenCalledTimes(1)
+      expect(mocks.bindings[2]!.destroy).toHaveBeenCalledTimes(1)
     })
   }
 })

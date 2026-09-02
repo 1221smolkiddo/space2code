@@ -11,6 +11,7 @@ import { env } from '../../config/env';
 import { getAccessToken } from '../../api/client';
 import type { RoomEventEnvelope } from '../../types';
 import { editorDocumentName } from '../../realtime/editorDocument';
+import { clearRoomTypingObservation, observeRoomTyping, registerRoomTypingSender } from '../../realtime/roomAwareness';
 import { OutputDrawer } from './OutputDrawer';
 import { WashiTape } from '../../components/doodles/WashiTape';
 import { 
@@ -34,8 +35,12 @@ interface RealtimeBinding {
   documentName: string;
   provider: HocuspocusProvider;
   doc: Y.Doc;
-  binding: MonacoBinding;
-  awarenessLabels: HTMLStyleElement[];
+  binding: MonacoBinding | null;
+  editor: MonacoEditor.IStandaloneCodeEditor | null;
+  model: MonacoEditor.ITextModel | null;
+  awarenessLabels: Set<HTMLStyleElement>;
+  unregisterTyping: () => void;
+  clearTypingObservation: () => void;
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
@@ -77,6 +82,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
   const state = slot === 'A' ? editorA : editorB;
   const isWritable = canWrite(slot);
+  const isMinimizedInExplain = isExplainMode && explainPrimarySlot !== slot;
   const ownerId = room?.participants.find((participant) => participant.slot === slot)?.userId;
   const pendingForOwner = permissionRequests.find((request) => request.editorOwnerId === user?.id && request.status === 'pending');
   const activeGrant = permissions.find((permission) => permission.editorOwnerId === user?.id && !permission.revokedAt && !permission.consumedAt);
@@ -86,41 +92,62 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     if(!realtime)return;
     realtimeRef.current=null;
     realtime.awarenessLabels.forEach(style=>style.remove());
-    realtime.binding.destroy();
+    realtime.awarenessLabels.clear();
+    realtime.unregisterTyping();
+    realtime.clearTypingObservation();
+    realtime.binding?.destroy();
     realtime.provider.destroy();
     realtime.doc.destroy();
+  },[]);
+
+  const releaseEditorBinding = useCallback(() => {
+    const realtime=realtimeRef.current;
+    realtime?.binding?.destroy();
+    if(realtime){realtime.binding=null;realtime.editor=null;realtime.model=null}
+    editorRef.current=null;
   },[]);
 
   const attachRealtime = useCallback((editor:MonacoEditor.IStandaloneCodeEditor) => {
     if(!env.realtimeReady){setRealtimeConnection('offline');return}
     if(!roomId||!ownerId)return;
     const name=editorDocumentName(roomId,slot);
-    if(realtimeRef.current?.documentName===name)return;
-    destroyRealtime();
-    const doc=new Y.Doc();
-    let awarenessLabels:HTMLStyleElement[]=[];
-    const provider=new HocuspocusProvider({
-      url:env.hocuspocusUrl,name,document:doc,token:getAccessToken,flushDelay:80,
-      onStatus:({status})=>setRealtimeConnection(status==='connected'?'connected':status==='connecting'?'connecting':'reconnecting'),
-      onAuthenticationFailed:()=>setRealtimeConnection('offline'),
-      onStateless:({payload})=>{try{handleRoomEvent(JSON.parse(payload) as RoomEventEnvelope)}catch{/* ignore malformed non-application payloads */}},
-      onAwarenessChange:({states})=>{
-        awarenessLabels.forEach(style=>style.remove());awarenessLabels=[];
-        for(const state of states){
-          const remote=state.user as {id?:string;name?:string}|undefined;
-          if(!remote?.name||remote.id===user?.id)continue;
-          const style=document.createElement('style');
-          style.textContent=`.yRemoteSelectionHead-${state.clientId}::after{content:${JSON.stringify(remote.name.slice(0,30))}}`;
-          document.head.append(style);awarenessLabels.push(style);
-        }
-      },
-      onDestroy:()=>{awarenessLabels.forEach(style=>style.remove());awarenessLabels=[]},
-    });
+    let realtime=realtimeRef.current;
+    if(realtime?.documentName!==name){
+      destroyRealtime();
+      const doc=new Y.Doc(),awarenessLabels=new Set<HTMLStyleElement>();
+      const provider=new HocuspocusProvider({
+        url:env.hocuspocusUrl,name,document:doc,token:getAccessToken,flushDelay:80,
+        onStatus:({status})=>setRealtimeConnection(status==='connected'?'connected':status==='connecting'?'connecting':'reconnecting'),
+        onAuthenticationFailed:()=>setRealtimeConnection('offline'),
+        onStateless:({payload})=>{try{handleRoomEvent(JSON.parse(payload) as RoomEventEnvelope)}catch{/* ignore malformed non-application payloads */}},
+        onAwarenessChange:({states})=>{
+          awarenessLabels.forEach(style=>style.remove());awarenessLabels.clear();
+          for(const state of states){
+            const remote=state.user as {id?:string;name?:string}|undefined;
+            if(!remote?.name||remote.id===user?.id)continue;
+            const style=document.createElement('style');
+            style.textContent=`.yRemoteSelectionHead-${state.clientId}::after{content:${JSON.stringify(remote.name.slice(0,30))}}`;
+            document.head.append(style);awarenessLabels.add(style);
+          }
+          const remoteStates=states.filter(state=>(state.user as {id?:string}|undefined)?.id!==user?.id);
+          const remoteId=(remoteStates.find(state=>state.typing===true)?.user as {id?:string}|undefined)?.id??null;
+          const presence=observeRoomTyping(roomId,slot,{userId:remoteId,isTyping:Boolean(remoteId)});
+          useSessionStore.getState().receiveTypingPresence(presence.userId,presence.isTyping);
+        },
+        onDestroy:()=>{awarenessLabels.forEach(style=>style.remove());awarenessLabels.clear()},
+      });
+      const unregisterTyping=registerRoomTypingSender(roomId,slot,(isTyping)=>provider.awareness?.setLocalStateField('typing',isTyping));
+      const clearTypingObservation=()=>{const presence=clearRoomTypingObservation(roomId,slot);useSessionStore.getState().receiveTypingPresence(presence.userId,presence.isTyping)};
+      realtime={documentName:name,provider,doc,binding:null,editor:null,model:null,awarenessLabels,unregisterTyping,clearTypingObservation};
+      realtimeRef.current=realtime;
+      provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:currentSlot==='A'?'#8ca47e':'#d69a5c'});
+    }
     const model=editor.getModel();
-    if(!model){provider.destroy();doc.destroy();return}
-    const binding=new MonacoBinding(doc.getText('code'),model,new Set([editor]),provider.awareness);
-    realtimeRef.current={documentName:name,provider,doc,binding,awarenessLabels};
-    provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:currentSlot==='A'?'#8ca47e':'#d69a5c'});
+    if(!model||!realtime)return;
+    if(realtime.binding&&realtime.editor===editor&&realtime.model===model)return;
+    realtime.binding?.destroy();
+    const binding=new MonacoBinding(realtime.doc.getText('code'),model,new Set([editor]),realtime.provider.awareness);
+    realtimeRef.current={...realtime,binding,editor,model};
   },[currentSlot,destroyRealtime,handleRoomEvent,ownerId,roomId,setRealtimeConnection,slot,user?.displayName,user?.id]);
 
   const mountEditor = useCallback((editor:MonacoEditor.IStandaloneCodeEditor) => {
@@ -136,6 +163,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
   useEffect(()=>()=>{destroyRealtime();editorRef.current=null},[destroyRealtime]);
 
+  useEffect(()=>{if(isMinimizedInExplain)releaseEditorBinding()},[isMinimizedInExplain,releaseEditorBinding]);
+
   useEffect(()=>{
     const editor=editorRef.current;if(!editor)return;
     const decorations=annotations.filter(annotation=>annotation.targetSlot===slot&&annotation.startLine).map(annotation=>({
@@ -149,8 +178,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   const handleRun=()=>void runCode(slot,editorRef.current?.getValue()??'');
   const handleAnnotate=()=>{const selection=editorRef.current?.getSelection();if(selection)void addAnnotation(slot,selection.startLineNumber,selection.endLineNumber,null)};
   const handleNote=()=>{const selection=editorRef.current?.getSelection(),note=window.prompt('Note for the selected code lines');if(selection&&note?.trim())void addAnnotation(slot,selection.startLineNumber,selection.endLineNumber,note.trim())};
-
-  const isMinimizedInExplain = isExplainMode && explainPrimarySlot !== slot;
 
   if (isMinimizedInExplain) {
     return (

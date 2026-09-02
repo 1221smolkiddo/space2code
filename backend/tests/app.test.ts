@@ -80,6 +80,14 @@ describe('room HTTP API', () => {
     expect(recent.json().sessions).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: original.id, canReopen: true, canReconnect: false }),
     ]))
+    const removed = await app.inject({
+      method: 'DELETE', url: `/v1/sessions/recent/${original.id}`, headers: auth(userA),
+    })
+    expect(removed.statusCode).toBe(204)
+    expect((await app.inject({ method: 'GET', url: '/v1/sessions/recent', headers: auth(userA) })).json().sessions).toEqual([])
+    expect((await app.inject({ method: 'GET', url: '/v1/sessions/recent', headers: auth(userB) })).json().sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: original.id }),
+    ]))
     const resumed = await app.inject({
       method: 'POST', url: `/v1/sessions/${original.id}/resume`, headers: auth(userB),
     })

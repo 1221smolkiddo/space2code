@@ -8,6 +8,7 @@ import { parseDocumentName } from './document-name.js'
 import type { DocumentStore } from './document-store.js'
 import { PresenceTracker } from './presence-tracker.js'
 import type { HocuspocusRoomEventPublisher } from './events.js'
+import { resolveEditorAuthority } from './editor-access.js'
 
 interface RealtimeContext {
   userId: string
@@ -51,15 +52,9 @@ export function createRealtimeServer(options: RealtimeServerOptions) {
       if (!room) throw new Error('Not a room participant')
       if (room.status === 'expired') throw new Error('Room has expired')
 
-      const owner = room.participants.find((participant) => participant.slot === parsed.ownerSlot)
-      if (!owner) throw new Error('Editor owner has not joined the room')
-      const isOwner = owner.userId === user.id
-      const active = room.status === 'waiting' || room.status === 'live'
-      const canWrite = active && (isOwner || await options.roomRepository.hasWritePermission(
-        parsed.roomId, owner.userId, user.id,
-      ))
-      connectionConfig.readOnly = !canWrite
-      return { userId: user.id, roomId: parsed.roomId, ownerId: owner.userId, ownerSlot: parsed.ownerSlot, isOwner }
+      const authority=await resolveEditorAuthority(options.roomRepository,room,parsed.ownerSlot,user.id)
+      connectionConfig.readOnly = !authority.canWrite
+      return { userId: user.id, roomId: parsed.roomId, ownerId: authority.ownerId, ownerSlot: parsed.ownerSlot, isOwner:authority.isOwner }
     },
     async connected({ context }) {
       await presence.connect(context.roomId, context.userId)
@@ -68,11 +63,9 @@ export function createRealtimeServer(options: RealtimeServerOptions) {
     },
     async beforeHandleMessage({ context, connection }) {
       const room = await options.roomRepository.findForUser(context.roomId, context.userId)
-      const active = room?.status === 'waiting' || room?.status === 'live'
-      const canWrite = active && (context.isOwner || await options.roomRepository.hasWritePermission(
-        context.roomId, context.ownerId, context.userId,
-      ))
-      connection.readOnly = !canWrite
+      connection.readOnly = !room || !(await resolveEditorAuthority(
+        options.roomRepository,room,context.ownerSlot,context.userId,
+      )).canWrite
     },
     async onLoadDocument({ documentName, document }) {
       const state = await options.documentStore.load(documentName)

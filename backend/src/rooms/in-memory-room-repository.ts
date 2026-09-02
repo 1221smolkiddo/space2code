@@ -12,6 +12,7 @@ export class InMemoryRoomRepository implements RoomRepository {
   private readonly rooms = new Map<string, Room>()
   private readonly permissionRequests = new Map<string, PermissionRequest>()
   private readonly permissions = new Map<string, EditorPermission>()
+  private readonly removedRecents = new Set<string>()
 
   async create(input: CreateRoomInput): Promise<Room> {
     if ([...this.rooms.values()].some((room) => room.roomCode === input.roomCode)) {
@@ -88,7 +89,8 @@ export class InMemoryRoomRepository implements RoomRepository {
     const now = Date.now()
     return [...this.rooms.values()]
       .filter((room) => room.expiresAt > new Date(now).toISOString() &&
-        room.participants.some((participant) => participant.userId === userId))
+        room.participants.some((participant) => participant.userId === userId) &&
+        !this.removedRecents.has(`${room.id}:${userId}`))
       .sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt))
       .map((room) => {
         const partnerId = room.participants.find((participant) => participant.userId !== userId)?.userId ??
@@ -109,6 +111,12 @@ export class InMemoryRoomRepository implements RoomRepository {
         canReopen: room.status === 'ended',
         resumedFromSessionId: room.resumedFromSessionId,
       }})
+  }
+
+  async removeRecent(roomId:string,userId:string):Promise<void>{
+    const room=this.requireRoom(roomId)
+    this.requireParticipant(room,userId)
+    this.removedRecents.add(`${roomId}:${userId}`)
   }
 
   async resume(sourceRoomId: string, input: CreateRoomInput): Promise<Room> {

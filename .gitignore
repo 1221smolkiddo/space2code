@@ -17,6 +17,9 @@ coverage/
 .agents/skills/
 skills-lock.json
 
+# Supabase CLI local link/cache state
+supabase/.temp/
+
 # Certificates / keys / tokens
 *.pem
 *.key

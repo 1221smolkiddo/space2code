@@ -6,6 +6,7 @@ import { socialApi } from '../api/social'
 import { ApiError } from '../api/client'
 import { useAuthStore } from './authStore'
 import { participantName } from '../utils/participantName'
+import { sendRoomTyping } from '../realtime/roomAwareness'
 import type {
   ChatMessageDto, EditorPermission, ExplainAnnotation, ExplainMessage, ExplainState,
   ExecutionResult, PermissionRequest, PermissionScope, Room, RoomEventEnvelope, RoomResponse, SessionTimer, Slot,
@@ -63,6 +64,7 @@ interface SessionState {
   hydrate: (roomId:string, signal?:AbortSignal) => Promise<void>
   setRealtimeConnection: (state:ConnectionState) => void
   handleRoomEvent: (envelope:RoomEventEnvelope) => void
+  receiveTypingPresence: (userId:string|null,isTyping:boolean) => void
   canWrite: (slot:Slot) => boolean
   setTimer: (minutes:number) => Promise<void>
   tickTimer: () => void
@@ -169,11 +171,7 @@ export const useSessionStore=create<SessionState>((set,get)=>({
         if(event.type==='participant.connected'&&!get().room?.participants.some(p=>p.userId===event.userId))void get().hydrate(get().roomId).catch(()=>undefined)
       }
     }else if(event.type==='participant.typing'){
-      if(event.userId!==useAuthStore.getState().user?.id){
-        if(partnerTypingTimer)clearTimeout(partnerTypingTimer)
-        set({partnerIsTyping:event.isTyping})
-        if(event.isTyping)partnerTypingTimer=setTimeout(()=>{partnerTypingTimer=null;set({partnerIsTyping:false})},3000)
-      }
+      get().receiveTypingPresence(event.userId,event.isTyping)
     }else if(event.type==='session.ended'){
       const partnerLeft=event.endedBy!==useAuthStore.getState().user?.id
       if(partnerTypingTimer){clearTimeout(partnerTypingTimer);partnerTypingTimer=null}
@@ -198,6 +196,13 @@ export const useSessionStore=create<SessionState>((set,get)=>({
       if(event.result)set({sharedTerminal:terminalResult(get().sharedTerminal,event.result)})
       else set({sharedTerminal:{...get().sharedTerminal,outputState:'error',stderr:`Execution ended with ${event.status.replaceAll('_',' ')}.`,isOutputOpen:true}})
     }
+  },
+  receiveTypingPresence:(userId,isTyping)=>{
+    if(userId&&userId===useAuthStore.getState().user?.id)return
+    if(partnerTypingTimer)clearTimeout(partnerTypingTimer)
+    partnerTypingTimer=null
+    set({partnerIsTyping:Boolean(userId)&&isTyping})
+    if(userId&&isTyping)partnerTypingTimer=setTimeout(()=>{partnerTypingTimer=null;set({partnerIsTyping:false})},3000)
   },
   canWrite:(slot)=>{if(get().room?.status!=='waiting'&&get().room?.status!=='live')return false;if(slot===get().currentSlot)return true;const owner=get().room?.participants.find(p=>p.slot===slot)?.userId,user=useAuthStore.getState().user?.id;return get().permissions.some(p=>p.editorOwnerId===owner&&p.granteeId===user&&!p.revokedAt&&!p.consumedAt)},
   setTimer:async(minutes)=>{try{const{timer}=await roomsApi.startTimer(get().roomId,minutes*60);set({timer:timerView(timer,get().serverTimeOffsetMs)})}catch(error){set({error:safeError(error)})}},
@@ -232,7 +237,7 @@ export const useSessionStore=create<SessionState>((set,get)=>({
   removeAnnotation:async(id)=>{try{await collaborationApi.removeAnnotation(get().roomId,id);set({annotations:get().annotations.filter(a=>a.id!==id)})}catch(error){set({error:safeError(error)})}},
   toggleChat:()=>set({isChatOpen:!get().isChatOpen}),
   sendMessage:async(text)=>{try{if(get().isExplainMode){const result=await collaborationApi.sendExplain(get().roomId,text) as {message:ExplainMessage};const value=explainChat(result.message,get().room);if(!get().explainMessages.some(m=>m.id===value.id))set({explainMessages:[...get().explainMessages,value],messages:[...get().messages,value]})}else{const{message}=await collaborationApi.sendChat(get().roomId,text);const value=chat(message,get().room);if(!get().normalMessages.some(m=>m.id===value.id))set({normalMessages:[...get().normalMessages,value],messages:[...get().messages,value]})}}catch(error){set({error:safeError(error)})}},
-  setTyping:async(isTyping)=>{if(!get().roomId)return;try{await roomsApi.typing(get().roomId,isTyping)}catch{/* Ephemeral typing must never block chat or navigation. */}},
+  setTyping:async(isTyping)=>{if(!get().roomId||sendRoomTyping(get().roomId,isTyping))return;try{await roomsApi.typing(get().roomId,isTyping)}catch{/* Ephemeral typing must never block chat or navigation. */}},
   leaveSession:async()=>{try{await get().setTyping(false);await roomsApi.leave(get().roomId);await socialApi.setPresence('ONLINE').catch(()=>undefined)}catch(error){set({error:safeError(error)});throw error}},
   exportSession:async()=>{try{const{blob,filename}=await collaborationApi.export(get().roomId);const url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=filename;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),0)}catch(error){set({error:safeError(error)});throw error}},
   clearError:()=>set({error:null}),

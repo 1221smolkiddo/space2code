@@ -127,6 +127,10 @@ export class RoomService {
     return this.repository.recent(userId)
   }
 
+  async removeRecent(userId:string,roomId:string):Promise<void>{
+    await this.repository.removeRecent(roomId,userId)
+  }
+
   async resume(userId: string, sourceRoomId: string): Promise<Room> {
     const source = await this.get(userId, sourceRoomId)
     if (source.status !== 'ended') {

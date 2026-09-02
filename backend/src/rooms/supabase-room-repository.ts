@@ -38,6 +38,10 @@ export class SupabaseRoomRepository implements RoomRepository {
     return data.map(mapRecentSession)
   }
 
+  async removeRecent(roomId:string,userId:string):Promise<void>{
+    await this.rpc('space2code_remove_recent_session',{p_session_id:roomId,p_user_id:userId})
+  }
+
   async resume(sourceRoomId: string, input: CreateRoomInput): Promise<Room> {
     return mapRoom(await this.rpc('space2code_resume_session', {
       p_source_session_id: sourceRoomId, p_room_code: input.roomCode,
@@ -149,7 +153,8 @@ function nullableString(value: unknown): string | null {
 export function mapRoom(value: unknown): Room {
   const row = record(value)
   const participants = Array.isArray(row.participants) ? row.participants : []
-  return {
+  const partner=row.partner&&typeof row.partner==='object'&&!Array.isArray(row.partner)?record(row.partner):null
+  const room:Room = {
     id: string(row.id), roomCode: string(row.room_code), language: string(row.language),
     status: string(row.status) as Room['status'], createdBy: string(row.created_by),
     endedBy: nullableString(row.ended_by), endedReason: nullableString(row.ended_reason),
@@ -175,6 +180,8 @@ export function mapRoom(value: unknown): Room {
       }
     }),
   }
+  if(Object.prototype.hasOwnProperty.call(row,'partner'))room.partner=partner?{userId:string(partner.user_id),displayName:nullableString(partner.display_name),avatarUrl:nullableString(partner.avatar_url)}:null
+  return room
 }
 
 function mapTimer(value: unknown): SessionTimer {

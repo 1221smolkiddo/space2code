@@ -101,4 +101,15 @@ describe('RoomService', () => {
     ])
     await expect(service.setTyping(userC, room.id, true)).rejects.toMatchObject({ code: 'NOT_A_PARTICIPANT' })
   })
+
+  it('removes a recent session only for the requesting participant',async()=>{
+    const repository=new InMemoryRoomRepository(),service=new RoomService(repository)
+    const room=await service.create(userA,'python');await service.join(userB,room.roomCode)
+    expect(await service.recent(userA)).toHaveLength(1);expect(await service.recent(userB)).toHaveLength(1)
+    await service.removeRecent(userA,room.id)
+    expect(await service.recent(userA)).toHaveLength(0)
+    expect(await service.recent(userB)).toHaveLength(1)
+    expect(await service.get(userA,room.id)).toMatchObject({id:room.id})
+    await expect(service.removeRecent(userC,room.id)).rejects.toMatchObject({code:'NOT_A_PARTICIPANT'})
+  })
 })

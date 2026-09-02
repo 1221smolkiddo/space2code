@@ -49,6 +49,7 @@ export interface Room {
   questions: SessionQuestions
   timer: SessionTimer
   participants: Participant[]
+  partner?: { userId: string; displayName: string | null; avatarUrl: string | null } | null
 }
 
 export interface RecentSession {

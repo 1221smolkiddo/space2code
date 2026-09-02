@@ -24,6 +24,7 @@ interface SocialState {
   inviteFriend: (friendId: string, sessionId: string) => Promise<void>
   respondInvite: (id: string, action: 'accept' | 'decline') => Promise<string | null>
   resumeSession: (id: string) => Promise<string>
+  removeRecentSession: (id:string) => Promise<void>
   clearError: () => void
 }
 
@@ -86,6 +87,10 @@ export const useSocialStore = create<SocialState>((set, get) => ({
   resumeSession: async (id) => {
     try { return (await roomsApi.resume(id)).room.id }
     catch (error) { set({ error: errorMessage(error) }); throw error }
+  },
+  removeRecentSession:async(id)=>{
+    try{await socialApi.removeRecent(id);set({recentSessions:get().recentSessions.filter(session=>session.sessionId!==id)})}
+    catch(error){set({error:errorMessage(error)});throw error}
   },
   clearError: () => set({ error: null }),
 }))

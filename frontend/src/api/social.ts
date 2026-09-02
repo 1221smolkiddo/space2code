@@ -7,4 +7,5 @@ export const socialApi={
  setPresence:(state:'ONLINE'|'IN_SESSION')=>apiRequest<void>('/v1/presence',{method:'PUT',body:{state}}),offline:()=>apiRequest<void>('/v1/presence',{method:'DELETE'}),
  invites:()=>apiRequest<{invites:SessionInvite[]}>('/v1/invites'),invite:(sessionId:string,inviteeId:string)=>apiRequest<{invite:SessionInvite}>(`/v1/sessions/${sessionId}/invites`,{method:'POST',body:{inviteeId}}),respondInvite:(id:string,action:'accept'|'decline')=>apiRequest<{invite:SessionInvite;room?:unknown}>(`/v1/invites/${id}/${action}`,{method:'POST'}),
  recent:()=>apiRequest<{sessions:RecentSession[]}>('/v1/sessions/recent'),
+ removeRecent:(sessionId:string)=>apiRequest<void>(`/v1/sessions/recent/${sessionId}`,{method:'DELETE'}),
 }

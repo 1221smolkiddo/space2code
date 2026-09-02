@@ -15,6 +15,7 @@ export interface RoomRepository {
   findForUser(roomId: string, userId: string): Promise<Room | null>
   leave(roomId: string, userId: string): Promise<Room>
   recent(userId: string): Promise<RecentSession[]>
+  removeRecent(roomId: string, userId: string): Promise<void>
   resume(sourceRoomId: string, input: CreateRoomInput): Promise<Room>
   updateQuestion(roomId: string, userId: string, question: string | null, now: string): Promise<Room>
   startTimer(

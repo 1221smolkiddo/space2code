@@ -59,6 +59,14 @@ export async function registerRoomRoutes(app: FastifyInstance, options: RoomRout
     return reply.send({ sessions: await options.roomService.recent(user.id) })
   })
 
+  app.delete('/v1/sessions/recent/:sessionId', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) return
+    const { sessionId } = sessionParamsSchema.parse(request.params)
+    await options.roomService.removeRecent(user.id,sessionId)
+    return reply.code(204).send()
+  })
+
   app.get('/v1/sessions/:sessionId', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) return
@@ -143,7 +151,7 @@ export async function registerRoomRoutes(app: FastifyInstance, options: RoomRout
     const permission = await options.roomService.grantPermission(user.id, roomId, requestId, scope)
     return reply.send({
       permission,
-      realtime: { reconnectRequired: true, editorOwnerId: user.id },
+      realtime: { reconnectRequired: false, editorOwnerId: user.id },
     })
   })
 
