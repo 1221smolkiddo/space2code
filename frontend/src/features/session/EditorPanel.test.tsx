@@ -64,7 +64,7 @@ vi.mock('@monaco-editor/react',async()=>{
   function MockMonacoEditor({onMount,options}:{onMount:(editor:(typeof mocks.editors)[number])=>void;options:{readOnly:boolean}}){
     const editor=React.useMemo(()=>{
       const model=createMockModel(`model-${mocks.editors.length}`)
-      const value={getModel:vi.fn(()=>model),getValue:vi.fn(()=>''),getSelection:vi.fn(),deltaDecorations:vi.fn(()=>[])}
+      const value={hasTextFocus:vi.fn(()=>false),onDidFocusEditorText:vi.fn(()=>({dispose:vi.fn()})),onDidBlurEditorText:vi.fn(()=>({dispose:vi.fn()})),onDidChangeCursorSelection:vi.fn(()=>({dispose:vi.fn()})),onDidDispose:vi.fn(()=>({dispose:vi.fn()})),getModel:vi.fn(()=>model),getValue:vi.fn(()=>''),getSelection:vi.fn(),deltaDecorations:vi.fn(()=>[])}
       mocks.editors.push(value)
       return value
     },[])
@@ -236,6 +236,46 @@ describe('both viewers after Explain Mode',()=>{
       view.unmount()
       for(const provider of mocks.providers)expect(provider.destroy).toHaveBeenCalledTimes(1)
       for(const binding of mocks.bindings)expect(binding.destroy).toHaveBeenCalledTimes(1)
+    })
+  }
+})
+
+describe('awareness identity on both desks',()=>{
+  for(const viewer of ['A','B'] as const){
+    it(`advertises logged-in user ${viewer} on both providers through grants and Explain remounts`,()=>{
+      const id=viewer==='A'?userA:userB,remoteId=viewer==='A'?userB:userA
+      useAuthStore.setState({user:{id,email:'local@example.com',displayName:'Local User',avatarUrl:null}})
+      useSessionStore.setState({room,roomId,currentSlot:viewer,permissions:[],permissionRequests:[],annotations:[]})
+      const view=render(<>{(['A','B'] as const).map(slot=><EditorPanel key={slot} slot={slot} username="Desk label" partnerName="Partner profile" isOwner={slot===viewer} isPartnerOnline language="python"/>)}</>)
+      const assertIdentity=()=>{
+        expect(mocks.providers).toHaveLength(2)
+        for(const provider of mocks.providers){
+          const calls=provider.awareness.setLocalStateField.mock.calls.filter(([field])=>field==='user')
+          expect(calls.length).toBeGreaterThan(0)
+          for(const [,identity] of calls)expect(identity).toMatchObject({id,name:'Local User'})
+        }
+        const identities=mocks.providers.map(p=>p.awareness.setLocalStateField.mock.calls.find(([field])=>field==='user')![1])
+        expect(identities[0]).toEqual(identities[1])
+      }
+      assertIdentity()
+      act(()=>useSessionStore.setState({permissions:[{sessionId:roomId,editorOwnerId:remoteId,granteeId:id,scope:'session',grantedAt:room.createdAt,revokedAt:null,consumedAt:null}]}))
+      assertIdentity()
+      for(const [index,slot] of (['A','B'] as const).entries()){
+        act(()=>mocks.providers[index]!.options.onAwarenessChange?.({states:[{clientId:42,user:{id:remoteId,name:'Remote Name'}}]}))
+        const rules=[...document.head.querySelectorAll('style')].map(style=>style.textContent).join('\n')
+        expect(rules).toContain(`[data-awareness-desk="${slot}"] .yRemoteSelectionHead-42`)
+        expect(rules).not.toContain('Remote Name')
+        expect(rules).not.toContain('content:')
+      }
+      act(()=>mocks.providers[0]!.options.onAwarenessChange?.({states:[]}))
+      expect([...document.head.querySelectorAll('style')].some(style=>style.textContent?.includes('[data-awareness-desk="A"] .yRemote'))).toBe(false)
+      expect([...document.head.querySelectorAll('style')].some(style=>style.textContent?.includes('[data-awareness-desk="B"] .yRemote'))).toBe(true)
+      act(()=>useSessionStore.setState({isExplainMode:true,explainPrimarySlot:'A'}))
+      expect(mocks.providers[1]!.awareness.setLocalStateField).toHaveBeenCalledWith('selection',null)
+      act(()=>useSessionStore.setState({isExplainMode:false,permissions:[]}))
+      assertIdentity()
+      view.unmount()
+      expect([...document.head.querySelectorAll('style')].some(style=>style.textContent?.includes('.yRemoteSelectionHead-42'))).toBe(false)
     })
   }
 })

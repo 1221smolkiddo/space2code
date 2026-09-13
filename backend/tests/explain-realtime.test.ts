@@ -1,4 +1,3 @@
-
 import { describe, expect, it, vi } from 'vitest'
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider'
 import WebSocket from 'ws'
@@ -49,6 +48,7 @@ describe('two-user realtime after Explain Mode',()=>{
           let destroyed=false
           const client={doc,provider,socket,destroy:()=>{if(destroyed)return;destroyed=true;provider.destroy();socket.destroy();doc.destroy()}}
           clients.push(client)
+          provider.awareness?.setLocalStateField('user',{id:user,name:user===A?'Ada':'Grace'})
           provider.attach()
           await vi.waitFor(()=>expect(provider.isSynced).toBe(true))
           return client
@@ -73,6 +73,21 @@ describe('two-user realtime after Explain Mode',()=>{
           assertAuthority('A',A,false);assertAuthority('B',B,false)
           assertAuthority('A',B,true);assertAuthority('B',A,true)
           await insert(aa,ba,'owner A\n');await insert(bb,ab,'owner B\n')
+          const assertCursor=async(writer:Client,reader:Client,otherDesk:Client,user:string)=>{
+            const selection={anchor:Y.createRelativePositionFromTypeIndex(text(writer),0),head:Y.createRelativePositionFromTypeIndex(text(writer),text(writer).length)}
+            writer.provider.awareness!.setLocalStateField('selection',selection)
+            await vi.waitFor(()=>{
+              const remote=reader.provider.awareness!.getStates().get(writer.doc.clientID)
+              expect(remote?.user).toEqual({id:user,name:user===A?'Ada':'Grace'})
+              expect(remote?.selection).toEqual(selection)
+              expect(Y.createAbsolutePositionFromRelativePosition(remote!.selection.head,reader.doc)?.type).toBe(text(reader))
+            })
+            expect(otherDesk.provider.awareness!.getStates().has(writer.doc.clientID)).toBe(false)
+            writer.provider.awareness!.setLocalStateField('selection',null)
+            await vi.waitFor(()=>expect(reader.provider.awareness!.getStates().get(writer.doc.clientID)?.selection).toBeNull())
+          }
+          await assertCursor(aa,ba,bb,A)
+          await assertCursor(bb,ab,aa,B)
           if(grantBefore){await grant(A,B);await grant(B,A)}
           await collaboration.activateExplain(room.id,A,targetSlot)
           await vi.waitFor(()=>expect(received.some(payload=>payload.includes('"active":true'))).toBe(true))
@@ -82,6 +97,8 @@ describe('two-user realtime after Explain Mode',()=>{
           if(!grantBefore){await grant(A,B);await grant(B,A)}
           await insert(ba,aa,'B edits A after Explain\n')
           await insert(ab,bb,'A edits B after Explain\n')
+          await assertCursor(ba,aa,ab,B)
+          await assertCursor(ab,bb,ba,A)
           assertAuthority('A',B,false);assertAuthority('B',A,false)
           expect(realtime.server.hocuspocus.documents.size).toBe(2)
           expect(serverDoc('A').getConnectionsCount()).toBe(2)

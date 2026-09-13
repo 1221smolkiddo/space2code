@@ -10,6 +10,7 @@ import { useAuthStore } from '../../store/authStore';
 import { env } from '../../config/env';
 import { getAccessToken } from '../../api/client';
 import type { RoomEventEnvelope } from '../../types';
+import { participantColor, remoteCursorCss, trackEditorCursor } from '../../realtime/editorAwareness';
 import { editorDocumentName } from '../../realtime/editorDocument';
 import { clearRoomTypingObservation, observeRoomTyping, registerRoomTypingSender } from '../../realtime/roomAwareness';
 import { OutputDrawer } from './OutputDrawer';
@@ -38,7 +39,8 @@ interface RealtimeBinding {
   binding: MonacoBinding | null;
   editor: MonacoEditor.IStandaloneCodeEditor | null;
   model: MonacoEditor.ITextModel | null;
-  awarenessLabels: Set<HTMLStyleElement>;
+  awarenessStyles: Set<HTMLStyleElement>;
+  releaseCursor: () => void;
   unregisterTyping: () => void;
   clearTypingObservation: () => void;
 }
@@ -70,7 +72,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     permissionRequests,
     permissions,
     room,
-    currentSlot,
     annotations,
     addAnnotation
   } = useSessionStore();
@@ -91,8 +92,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const realtime=realtimeRef.current;
     if(!realtime)return;
     realtimeRef.current=null;
-    realtime.awarenessLabels.forEach(style=>style.remove());
-    realtime.awarenessLabels.clear();
+    realtime.awarenessStyles.forEach(style=>style.remove());
+    realtime.awarenessStyles.clear();
+    realtime.releaseCursor();
     realtime.unregisterTyping();
     realtime.clearTypingObservation();
     if(!realtime.model?.isDisposed())realtime.binding?.destroy();
@@ -102,6 +104,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
   const releaseEditorBinding = useCallback(() => {
     const realtime=realtimeRef.current;
+    realtime?.releaseCursor();
     // y-monaco already destroys the binding when Monaco disposes its model.
     if(realtime&&!realtime.model?.isDisposed())realtime.binding?.destroy();
     if(realtime){realtime.binding=null;realtime.editor=null;realtime.model=null}
@@ -115,41 +118,45 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     let realtime=realtimeRef.current;
     if(realtime?.documentName!==name){
       destroyRealtime();
-      const doc=new Y.Doc(),awarenessLabels=new Set<HTMLStyleElement>();
+      const doc=new Y.Doc(),awarenessStyles=new Set<HTMLStyleElement>();
       const provider=new HocuspocusProvider({
         url:env.hocuspocusUrl,name,document:doc,token:getAccessToken,flushDelay:80,
         onStatus:({status})=>setRealtimeConnection(status==='connected'?'connected':status==='connecting'?'connecting':'reconnecting'),
         onAuthenticationFailed:()=>setRealtimeConnection('offline'),
         onStateless:({payload})=>{try{handleRoomEvent(JSON.parse(payload) as RoomEventEnvelope)}catch{/* ignore malformed non-application payloads */}},
         onAwarenessChange:({states})=>{
-          awarenessLabels.forEach(style=>style.remove());awarenessLabels.clear();
+          awarenessStyles.forEach(style=>style.remove());awarenessStyles.clear();
           for(const state of states){
             const remote=state.user as {id?:string;name?:string}|undefined;
-            if(!remote?.name||remote.id===user?.id)continue;
+            if(!remote?.id||remote.id===useAuthStore.getState().user?.id||!Number.isSafeInteger(state.clientId))continue;
             const style=document.createElement('style');
-            style.textContent=`.yRemoteSelectionHead-${state.clientId}::after{content:${JSON.stringify(remote.name.slice(0,30))}}`;
-            document.head.append(style);awarenessLabels.add(style);
+            style.textContent=remoteCursorCss(slot,state.clientId,remote.id);
+            document.head.append(style);awarenessStyles.add(style);
           }
-          const remoteStates=states.filter(state=>(state.user as {id?:string}|undefined)?.id!==user?.id);
+          const remoteStates=states.filter(state=>(state.user as {id?:string}|undefined)?.id!==useAuthStore.getState().user?.id);
           const remoteId=(remoteStates.find(state=>state.typing===true)?.user as {id?:string}|undefined)?.id??null;
           const presence=observeRoomTyping(roomId,slot,{userId:remoteId,isTyping:Boolean(remoteId)});
           useSessionStore.getState().receiveTypingPresence(presence.userId,presence.isTyping);
         },
-        onDestroy:()=>{awarenessLabels.forEach(style=>style.remove());awarenessLabels.clear()},
+        onDestroy:()=>{awarenessStyles.forEach(style=>style.remove());awarenessStyles.clear()},
       });
       const unregisterTyping=registerRoomTypingSender(roomId,slot,(isTyping)=>provider.awareness?.setLocalStateField('typing',isTyping));
       const clearTypingObservation=()=>{const presence=clearRoomTypingObservation(roomId,slot);useSessionStore.getState().receiveTypingPresence(presence.userId,presence.isTyping)};
-      realtime={documentName:name,provider,doc,binding:null,editor:null,model:null,awarenessLabels,unregisterTyping,clearTypingObservation};
+      realtime={documentName:name,provider,doc,binding:null,editor:null,model:null,awarenessStyles,unregisterTyping,clearTypingObservation,releaseCursor:()=>{}};
       realtimeRef.current=realtime;
-      provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:currentSlot==='A'?'#8ca47e':'#d69a5c'});
+      provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:participantColor(user?.id??'')});
     }
     const model=editor.getModel();
     if(!model||!realtime)return;
     if(realtime.binding&&realtime.editor===editor&&realtime.model===model)return;
     if(!realtime.model?.isDisposed())realtime.binding?.destroy();
+    realtime.releaseCursor();
     const binding=new MonacoBinding(realtime.doc.getText('code'),model,new Set([editor]),realtime.provider.awareness);
-    realtimeRef.current={...realtime,binding,editor,model};
-  },[currentSlot,destroyRealtime,handleRoomEvent,ownerId,roomId,setRealtimeConnection,slot,user?.displayName,user?.id]);
+    const releaseCursor=realtime.provider.awareness
+      ?trackEditorCursor(editor,realtime.doc.getText('code'),realtime.provider.awareness,()=>useSessionStore.getState().canWrite(slot))
+      :()=>{};
+    realtimeRef.current={...realtime,binding,editor,model,releaseCursor};
+  },[destroyRealtime,handleRoomEvent,ownerId,roomId,setRealtimeConnection,slot,user?.displayName,user?.id]);
 
   const mountEditor = useCallback((editor:MonacoEditor.IStandaloneCodeEditor) => {
     editorRef.current=editor;
@@ -159,8 +166,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   useEffect(()=>{if(editorRef.current)attachRealtime(editorRef.current)},[attachRealtime]);
 
   useEffect(()=>{
-    realtimeRef.current?.provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:currentSlot==='A'?'#8ca47e':'#d69a5c'});
-  },[currentSlot,user?.displayName,user?.id]);
+    realtimeRef.current?.provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:participantColor(user?.id??'')});
+  },[user?.displayName,user?.id]);
 
   useEffect(()=>()=>{destroyRealtime();editorRef.current=null},[destroyRealtime]);
 
@@ -175,6 +182,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const ids=editor.deltaDecorations([],decorations);
     return()=>{editor.deltaDecorations(ids,[])};
   },[annotations,slot]);
+
+  useEffect(()=>{
+    if(!isWritable)realtimeRef.current?.provider.awareness?.setLocalStateField('selection',null);
+  },[isWritable]);
 
   const handleRun=()=>void runCode(slot,editorRef.current?.getValue()??'');
   const handleAnnotate=()=>{const selection=editorRef.current?.getSelection();if(selection)void addAnnotation(slot,selection.startLineNumber,selection.endLineNumber,null)};
@@ -425,7 +436,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
       </div>
 
       {/* Monaco Editor Container */}
-      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+      <div data-awareness-desk={slot} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <Editor
           height="100%"
           language={language.toLowerCase() === 'c++' ? 'cpp' : language.toLowerCase()}

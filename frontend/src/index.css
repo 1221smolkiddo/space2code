@@ -294,17 +294,7 @@ input:focus, select:focus, textarea:focus {
 }
 
 [class*='yRemoteSelectionHead']::after {
-  position: absolute;
-  z-index: 8;
-  top: -1.25rem;
-  left: -2px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: var(--warm-accent);
-  color: #1a1814;
-  font: 10px/1.35 var(--font-ui);
-  white-space: nowrap;
-  pointer-events: none;
+  content: none;
 }
 
 .explain-line-highlight {
