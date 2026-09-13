@@ -91,7 +91,7 @@ interface SessionState {
 }
 
 const emptyTimer: TimerView = { status:'not_started',durationSeconds:null,startedAt:null,endsAt:null,startedBy:null,remainingSeconds:0 }
-const emptyEditor = ():EditorCardState => ({ outputState:'idle',stdout:'',stderr:'',stdin:'',isOutputOpen:false,permission:'none' })
+const emptyEditor = ():EditorCardState => ({ outputState:'idle',stdout:'',stderr:'',stdin:'',isOutputOpen:true,permission:'none' })
 const safeError = (error:unknown) => error instanceof ApiError || error instanceof Error ? error.message : 'Something went wrong. Please try again.'
 const remaining = (timer:SessionTimer,serverTimeOffsetMs=0) => timer.endsAt ? Math.max(0,Math.ceil((Date.parse(timer.endsAt)-(Date.now()+serverTimeOffsetMs))/1000)) : 0
 const timerView = (timer:SessionTimer,serverTimeOffsetMs=0):TimerView => {
@@ -128,8 +128,8 @@ export const useSessionStore=create<SessionState>((set,get)=>({
   editorA:emptyEditor(),editorB:emptyEditor(),sharedTerminal:emptyEditor(),permissionRequests:[],permissions:[],
   isExplainMode:false,explainPrimarySlot:'A',explainState:null,annotations:[],highlightedLines:[],
   isChatOpen:true,normalMessages:[],explainMessages:[],messages:[],
-  createSession:async(language)=>{set({isLoading:true,error:null});try{const response=await roomsApi.create(language),room=await resolvePartnerProfile(response.room),result={...response,room};set({isLoading:false,room,documents:result.documents,roomId:room.id,roomCode:room.roomCode,language:room.language});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
-  joinSession:async(roomCode)=>{set({isLoading:true,error:null});try{const response=await roomsApi.join(roomCode),room=await resolvePartnerProfile(response.room),result={...response,room};set({isLoading:false,room,documents:result.documents,roomId:room.id,roomCode:room.roomCode,language:room.language});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
+  createSession:async(language)=>{set({isLoading:true,error:null});try{const response=await roomsApi.create(language),room=await resolvePartnerProfile(response.room),result={...response,room};set({isLoading:false,room,documents:result.documents,roomId:room.id,roomCode:room.roomCode,language:room.language,sharedTerminal:emptyEditor()});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
+  joinSession:async(roomCode)=>{set({isLoading:true,error:null});try{const response=await roomsApi.join(roomCode),room=await resolvePartnerProfile(response.room),result={...response,room};set({isLoading:false,room,documents:result.documents,roomId:room.id,roomCode:room.roomCode,language:room.language,sharedTerminal:emptyEditor()});return result}catch(error){set({isLoading:false,error:safeError(error)});throw error}},
   hydrate:async(roomId,signal)=>{
     set({isLoading:true,error:null,connectionState:'connecting'})
     try{
@@ -154,6 +154,7 @@ export const useSessionStore=create<SessionState>((set,get)=>({
         timer:timerView(room.timer,serverTimeOffsetMs),serverTimeOffsetMs,partnerState:partner?.state==='connected'?'connected':'disconnected',
         isPartnerOnline:partner?.state==='connected',partnerHasLeft:room.status==='ended'&&room.endedBy===partner?.userId,partnerIsTyping:false,
         permissions,permissionRequests:requests,editorA:editor('A'),editorB:editor('B'),
+        sharedTerminal:get().roomId===room.id?get().sharedTerminal:emptyEditor(),
         explainState:explain.state,isExplainMode:explain.state.active,explainPrimarySlot:explain.state.targetSlot??current??'A',
         annotations:explain.annotations,highlightedLines:explain.annotations.filter(a=>a.type==='highlight').flatMap(a=>a.startLine?[a.startLine]:[]),
         normalMessages,explainMessages,messages:explain.state.active?explainMessages:normalMessages,isLoading:false})

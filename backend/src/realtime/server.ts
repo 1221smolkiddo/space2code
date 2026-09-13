@@ -8,6 +8,7 @@ import { parseDocumentName } from './document-name.js'
 import type { DocumentStore } from './document-store.js'
 import { PresenceTracker } from './presence-tracker.js'
 import type { HocuspocusRoomEventPublisher } from './events.js'
+import { SharedTerminalInputs } from './shared-terminal-input.js'
 import { resolveEditorAuthority } from './editor-access.js'
 
 interface RealtimeContext {
@@ -26,6 +27,7 @@ export interface RealtimeServerOptions {
   documentStore: DocumentStore
   disconnectGraceMs: number
   eventPublisher?: HocuspocusRoomEventPublisher
+  maxSharedStdinBytes?: number
   allowedOrigins: string[]
 }
 
@@ -37,6 +39,7 @@ export function createRealtimeServer(options: RealtimeServerOptions) {
   const presence = new PresenceTracker(options.roomRepository, options.disconnectGraceMs, options.eventPublisher)
   const documentConnections = new Map<string, number>()
   const allowedOrigins = options.allowedOrigins
+  const sharedInputs = new SharedTerminalInputs(options.maxSharedStdinBytes)
 
   const server = new Server<RealtimeContext>({
     port: options.port,
@@ -67,6 +70,15 @@ export function createRealtimeServer(options: RealtimeServerOptions) {
         options.roomRepository,room,context.ownerSlot,context.userId,
       )).canWrite
     },
+    async onStateless({ connection, document, payload }) {
+      const context = connection.context as RealtimeContext
+      // One channel for both participants, including read-only code viewers.
+      if (context.ownerSlot !== 'A') return
+      const room = await options.roomRepository.findForUser(context.roomId, context.userId)
+      if (!room || (room.status !== 'live' && room.status !== 'waiting')) return
+      sharedInputs.handle(context.roomId, connection, payload,
+        value => connection.sendStateless(value), value => document.broadcastStateless(value))
+    },
     async onLoadDocument({ documentName, document }) {
       const state = await options.documentStore.load(documentName)
       if (state) Y.applyUpdate(document, state)
@@ -82,6 +94,7 @@ export function createRealtimeServer(options: RealtimeServerOptions) {
       if (remaining > 0) documentConnections.set(key, remaining)
       else {
         documentConnections.delete(key)
+        if (![...documentConnections.keys()].some(key => key.startsWith(context.roomId + ':'))) sharedInputs.remove(context.roomId)
         if (!context.isOwner) {
           await options.roomRepository.consumeOncePermission(context.roomId, context.ownerId, context.userId)
         }

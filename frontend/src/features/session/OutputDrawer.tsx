@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { Terminal, X, Copy, Check, Play, Loader2 } from 'lucide-react';
 import type { EditorCardState } from '../../store/sessionStore';
 
@@ -10,166 +10,46 @@ interface OutputDrawerProps {
   onStdinChange: (value: string) => void;
 }
 
-export const OutputDrawer: React.FC<OutputDrawerProps> = ({
-  title,
-  state,
-  onClose,
-  onRun,
-  onStdinChange,
-}) => {
+export const OutputDrawer: React.FC<OutputDrawerProps> = ({ title, state, onClose, onRun, onStdinChange }) => {
   const [copied, setCopied] = useState(false);
-  const execution=`${state.pendingRequestId??''}:${state.executionId??''}:${state.outputState}`;
-  const [tabSelection,setTabSelection]=useState<{tab:'stdout'|'stdin';execution:string}|null>(null);
-  const activeTab=tabSelection?.execution===execution?tabSelection.tab:'stdout';
-  const setActiveTab=(tab:'stdout'|'stdin')=>setTabSelection({tab,execution});
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText([state.stdout,state.stderr].filter(Boolean).join('\n') || 'No output');
+  const inputId = useId();
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText([state.stdout, state.stderr].filter(Boolean).join('\n'));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
   return (
-    <div
-      style={{
-        height: '180px',
-        backgroundColor: '#161513',
-        borderTop: '1px solid var(--border-muted)',
-        display: 'flex',
-        flexDirection: 'column',
-        fontFamily: 'var(--font-mono)',
-        fontSize: '0.8rem',
-        color: '#E0DDD5',
-      }}
-    >
-      {/* Console Top Bar */}
-      <div
-        style={{
-          height: '32px',
-          backgroundColor: '#1E1D19',
-          borderBottom: '1px solid #2D2B26',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 0.75rem',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--warm-accent)', fontWeight: 700, fontSize: '0.75rem' }}>
-            <Terminal size={13} />
-            <span>{title}</span>
-          </div>
-
-          <div style={{ display: 'flex', gap: '0.25rem' }}>
-            <button
-              onClick={() => setActiveTab('stdout')}
-              style={{
-                padding: '0.15rem 0.45rem',
-                fontSize: '0.725rem',
-                borderRadius: '3px',
-                backgroundColor: activeTab === 'stdout' ? '#2B2924' : 'transparent',
-                color: activeTab === 'stdout' ? '#EBE6D8' : '#8A8578',
-              }}
-            >
-              Output
-            </button>
-            <button
-              onClick={() => setActiveTab('stdin')}
-              style={{
-                padding: '0.15rem 0.45rem',
-                fontSize: '0.725rem',
-                borderRadius: '3px',
-                backgroundColor: activeTab === 'stdin' ? '#2B2924' : 'transparent',
-                color: activeTab === 'stdin' ? '#EBE6D8' : '#8A8578',
-              }}
-            >
-              Stdin
-            </button>
-          </div>
-        </div>
-
+    <section aria-label={title} style={{ height: '220px', flexShrink: 0, backgroundColor: '#161513', borderTop: '1px solid var(--border-muted)', display: 'flex', flexDirection: 'column', fontFamily: 'var(--font-mono)', fontSize: '0.775rem', color: '#E0DDD5' }}>
+      <div style={{ minHeight: '32px', backgroundColor: '#1E1D19', borderBottom: '1px solid #2D2B26', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', padding: '0 0.75rem' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--warm-accent)', fontWeight: 700 }}><Terminal size={13} />{title}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          {state.stdout && (
-            <button 
-              onClick={handleCopy}
-              className="btn-ghost" 
-              style={{ padding: '0.15rem', color: '#8A8578' }} 
-              title="Copy Output"
-            >
-              {copied ? <Check size={13} style={{ color: 'var(--sage)' }} /> : <Copy size={13} />}
-            </button>
-          )}
-
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="btn-ghost"
-              style={{ padding: '0.15rem', color: '#8A8578' }}
-              title="Close Console"
-            >
-              <X size={14} />
-            </button>
+          {(state.stdout || state.stderr) && <button onClick={() => void handleCopy().catch(() => setCopied(false))} className="btn-ghost" title="Copy Output" aria-label="Copy Output">{copied ? <Check size={13} /> : <Copy size={13} />}</button>}
+          {onClose && <button onClick={onClose} className="btn-ghost" title="Close Console" aria-label="Close Console"><X size={14} /></button>}
+        </div>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.5rem 0.85rem' }}>
+        <label htmlFor={inputId} style={{ display: 'block', color: '#A49E90', fontSize: '0.7rem', marginBottom: '0.2rem' }}>Input for next run</label>
+        <textarea id={inputId} value={state.stdin} onChange={event => onStdinChange(event.target.value)} rows={2} spellCheck={false}
+          onKeyDown={event => {
+            event.stopPropagation();
+            if (event.ctrlKey && event.key === 'Enter' && onRun) {
+              event.preventDefault();
+              if (state.outputState !== 'running') onRun();
+            }
+          }}
+          placeholder="Enter input before Run…"
+          style={{ display: 'block', boxSizing: 'border-box', width: '100%', minHeight: '44px', background: 'transparent', border: 'none', borderLeft: '2px solid var(--sage)', borderRadius: 0, padding: '0.25rem 0.5rem', color: '#EBE6D8', font: 'inherit', lineHeight: 1.45, resize: 'none', overscrollBehavior: 'contain' }} />
+        <div style={{ borderTop: '1px solid #2D2B26', marginTop: '0.45rem', paddingTop: '0.4rem' }}>
+          <span style={{ color: '#A49E90', fontSize: '0.7rem' }}>Output</span>
+          {state.outputState === 'running' && <div role="status" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--warm-accent)', marginTop: '0.25rem' }}><Loader2 size={14} className="animate-spin" />Compiling &amp; executing code...</div>}
+          {(state.stdout || state.stderr) ? <pre style={{ margin: '0.25rem 0 0', font: 'inherit', lineHeight: 1.45, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{state.stdout}{state.stdout && state.stderr ? '\n' : ''}<span style={{ color: 'var(--error-color)' }}>{state.stderr}</span></pre> : state.outputState !== 'running' && (
+            <div style={{ color: '#8A8578', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.25rem' }}>
+              <span>No execution output yet. Click 'Run' to execute.</span>
+              {onRun && <button onClick={onRun} className="btn-ghost" style={{ whiteSpace: 'nowrap', color: 'var(--sage)' }}><Play size={11} /> Run Now</button>}
+            </div>
           )}
         </div>
       </div>
-
-      {/* Output Content Area */}
-      <div style={{ flex: 1, padding: '0.65rem 0.85rem', overflowY: 'auto' }}>
-        {state.outputState === 'running' ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--warm-accent)' }}>
-            <Loader2 size={14} className="animate-spin" />
-            <span>Compiling & executing code...</span>
-          </div>
-        ) : activeTab === 'stdin' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <span style={{ fontSize: '0.7rem', color: '#8A8578', marginBottom: '0.25rem' }}>
-              Enter input before Run. Each line supplies the next input value.
-            </span>
-            <textarea
-              value={state.stdin}
-              onChange={(e) => onStdinChange(e.target.value)}
-              placeholder="Enter standard input values here..."
-              style={{
-                flex: 1,
-                backgroundColor: '#100F0E',
-                border: '1px solid #2D2B26',
-                color: '#EBE6D8',
-                fontSize: '0.775rem',
-                fontFamily: 'var(--font-mono)',
-                padding: '0.4rem',
-                resize: 'none',
-              }}
-            />
-          </div>
-        ) : state.stdout || state.stderr ? (
-          <pre
-            style={{
-              margin: 0,
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.775rem',
-              lineHeight: 1.45,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              color: state.stderr ? 'var(--error-color)' : '#E0DDD5',
-            }}
-          >
-            {[state.stdout,state.stderr].filter(Boolean).join('\n')}
-          </pre>
-        ) : (
-          <div style={{ color: '#6A655A', fontStyle: 'italic', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span>No execution output yet. Click 'Run' to execute.</span>
-            {onRun && (
-              <button
-                onClick={onRun}
-                className="btn btn-outline"
-                style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem', borderColor: '#3A3831', color: 'var(--sage)' }}
-              >
-                <Play size={11} /> Run Now
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+    </section>
   );
 };

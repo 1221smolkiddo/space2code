@@ -101,6 +101,7 @@ const app = await buildApp({
   },
 })
 const realtime = createRealtimeServer({
+  maxSharedStdinBytes: config.EXECUTION_MAX_STDIN_BYTES,
   port: config.HOCUSPOCUS_PORT,
   address: config.HOST,
   authService,

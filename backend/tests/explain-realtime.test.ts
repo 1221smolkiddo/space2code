@@ -96,6 +96,26 @@ describe('two-user realtime after Explain Mode',()=>{
           if(grantBefore){await grant(A,B);await grant(B,A)}
           await collaboration.activateExplain(room.id,A,targetSlot)
           await vi.waitFor(()=>expect(received.some(payload=>payload.includes('"active":true'))).toBe(true))
+          // Shared stdin uses Desk A's authenticated stateless channel even when
+          // B has no code write grant and the focused editor is Desk B.
+          const inputMessages=(client:Client)=>client.messages.map(payload=>JSON.parse(payload)).filter(value=>value.type==='terminal.input')
+          aa.provider.sendStateless(JSON.stringify({type:'terminal.input',clientId:A,sequence:1,stdin:'Alice\n21\n'}))
+          await vi.waitFor(()=>expect(inputMessages(ba).at(-1)?.stdin).toBe('Alice\n21\n'))
+          ba.provider.sendStateless(JSON.stringify({type:'terminal.input',clientId:B,sequence:1,stdin:'Grace\n22'}))
+          await vi.waitFor(()=>expect(inputMessages(aa).at(-1)?.stdin).toBe('Grace\n22'))
+          expect(inputMessages(ab)).toHaveLength(0)
+          expect(inputMessages(bb)).toHaveLength(0)
+          expect(text(aa).toString()).toBe('owner A\n')
+          expect(text(bb).toString()).toBe('owner B\n')
+          const refreshedInput=await open(B,'A')
+          refreshedInput.provider.sendStateless(JSON.stringify({type:'terminal.input.sync'}))
+          await vi.waitFor(()=>expect(inputMessages(refreshedInput).at(-1)?.stdin).toBe('Grace\n22'))
+          refreshedInput.destroy()
+          await vi.waitFor(()=>expect(serverDoc('A').getConnectionsCount()).toBe(2))
+          aa.provider.sendStateless(JSON.stringify({type:'terminal.input',clientId:A,sequence:2,stdin:'rapid 1'}))
+          aa.provider.sendStateless(JSON.stringify({type:'terminal.input',clientId:A,sequence:3,stdin:'rapid 2'}))
+          await vi.waitFor(()=>expect(inputMessages(ba).at(-1)?.stdin).toBe('rapid 2'))
+          expect(inputMessages(ba).filter(value=>value.revision===4)).toHaveLength(1)
           await collaboration.deactivateExplain(room.id,A)
           await vi.waitFor(()=>expect(received.some(payload=>payload.includes('"active":false'))).toBe(true))
           expect((await rooms.get(A,room.id)).participants.map(p=>[p.slot,p.userId])).toEqual([['A',A],['B',B]])
@@ -104,7 +124,7 @@ describe('two-user realtime after Explain Mode',()=>{
           for(const [user,target,scope] of [[A,'A','personal'],[B,'B','personal'],[A,'B','personal'],[B,'A','explain']] as const){
             const result=await execution.execute({roomId:room.id,userId:user,targetSlot:target,scope,language:'python',source:'print(input())',stdin:'Alice\n'})
             for(const client of [aa,ab,ba,bb]){
-              await vi.waitFor(()=>expect(client.messages.map(payload=>JSON.parse(payload).event).filter(event=>event.type==='execution.completed'&&event.executionId===result.executionId)).toEqual([expect.objectContaining({targetSlot:target,scope,result})]))
+              await vi.waitFor(()=>expect(client.messages.map(payload=>JSON.parse(payload).event).filter(event=>event?.type==='execution.completed'&&event.executionId===result.executionId)).toEqual([expect.objectContaining({targetSlot:target,scope,result})]))
             }
           }
           await insert(ba,aa,'B edits A after Explain\n')

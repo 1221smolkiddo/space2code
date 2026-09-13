@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Room } from '../../types'
 
@@ -48,6 +48,9 @@ describe('session participant names',()=>{
     useSessionStore.setState({isExplainMode:true,sharedTerminal:{...useSessionStore.getState().sharedTerminal,stdout:'shared output'}})
     render(<SessionPage />)
     expect(screen.getAllByText('Shared Terminal')).toHaveLength(1)
+    expect(screen.getByText('shared output')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Input for next run'),{target:{value:'Alice\n21'}})
+    expect(useSessionStore.getState().sharedTerminal.stdin).toBe('Alice\n21')
     expect(screen.getByText('shared output')).toBeInTheDocument()
   })
 

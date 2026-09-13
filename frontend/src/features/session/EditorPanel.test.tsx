@@ -29,11 +29,14 @@ function createMockModel(id:string):MockModel {
 interface ProviderOptions {
   name: string
   document: { getText:(name:string)=>unknown }
+  onSynced?: (payload:{state:boolean})=>void
+  onStateless?: (payload:{payload:string})=>void
   onStatus?: (payload:{status:string})=>void
   onDestroy?: ()=>void
   onAwarenessChange?: (payload:{states:Array<{clientId:number;user?:{id?:string;name?:string};typing?:boolean}>})=>void
 }
 interface ProviderRecord {
+  sendStateless: ReturnType<typeof vi.fn>
   options: ProviderOptions
   awareness: { setLocalStateField: ReturnType<typeof vi.fn> }
   destroy: ReturnType<typeof vi.fn>
@@ -45,6 +48,7 @@ const mocks=vi.hoisted(()=>({
 
 vi.mock('@hocuspocus/provider',()=>({HocuspocusProvider:class{
   options:ProviderOptions
+  sendStateless=vi.fn()
   awareness={setLocalStateField:vi.fn()}
   destroy=vi.fn(()=>this.options.onDestroy?.())
   constructor(options:ProviderOptions){this.options=options;mocks.providers.push(this)}
@@ -278,4 +282,27 @@ describe('awareness identity on both desks',()=>{
       expect([...document.head.querySelectorAll('style')].some(style=>style.textContent?.includes('.yRemoteSelectionHead-42'))).toBe(false)
     })
   }
+})
+
+
+it('keeps shared input connected when opening Explain on Desk B with Desk A initially minimized', () => {
+  useAuthStore.setState({ user: { id: userB, email: 'grace@example.com', displayName: 'Grace', avatarUrl: null } })
+  useSessionStore.setState({ room, roomId, currentSlot: 'B', isExplainMode: true, explainPrimarySlot: 'B', permissions: [] })
+  const view = render(<EditorPanel slot="A" username="Ada" partnerName="Ada" isOwner={false} isPartnerOnline language="python" />)
+  expect(screen.queryByTestId('monaco')).not.toBeInTheDocument()
+  expect(mocks.providers).toHaveLength(1)
+  const provider = mocks.providers[0]!
+  act(() => provider.options.onSynced?.({ state: true }))
+  expect(JSON.parse(provider.sendStateless.mock.calls.at(-1)![0]).type).toBe('terminal.input.sync')
+  act(() => provider.options.onStateless?.({ payload: JSON.stringify({ type: 'terminal.input', roomId, revision: 1, stdin: 'Alice\n21', clientId: null, sequence: 0 }) }))
+  expect(useSessionStore.getState().sharedTerminal.stdin).toBe('Alice\n21')
+  act(() => useSessionStore.getState().setSharedStdin('Grace\n22'))
+  expect(JSON.parse(provider.sendStateless.mock.calls.at(-1)![0]).stdin).toBe('Grace\n22')
+  act(() => useSessionStore.setState({ isExplainMode: false }))
+  expect(mocks.providers).toHaveLength(1)
+  expect(screen.getByTestId('monaco')).toHaveAttribute('data-readonly', 'true')
+  const count = provider.sendStateless.mock.calls.length
+  view.unmount()
+  act(() => useSessionStore.getState().setSharedStdin('after unmount'))
+  expect(provider.sendStateless).toHaveBeenCalledTimes(count)
 })

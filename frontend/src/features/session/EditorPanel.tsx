@@ -11,6 +11,7 @@ import { env } from '../../config/env';
 import { getAccessToken } from '../../api/client';
 import type { RoomEventEnvelope } from '../../types';
 import { participantColor, remoteCursorCss, trackEditorCursor } from '../../realtime/editorAwareness';
+import { createSharedTerminalInput } from '../../realtime/sharedTerminalInput';
 import { editorDocumentName } from '../../realtime/editorDocument';
 import { clearRoomTypingObservation, observeRoomTyping, registerRoomTypingSender } from '../../realtime/roomAwareness';
 import { OutputDrawer } from './OutputDrawer';
@@ -42,6 +43,7 @@ interface RealtimeBinding {
   awarenessStyles: Set<HTMLStyleElement>;
   releaseCursor: () => void;
   unregisterTyping: () => void;
+  releaseSharedInput: () => void;
   clearTypingObservation: () => void;
 }
 
@@ -96,6 +98,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     realtime.awarenessStyles.clear();
     realtime.releaseCursor();
     realtime.unregisterTyping();
+    realtime.releaseSharedInput();
     realtime.clearTypingObservation();
     if(!realtime.model?.isDisposed())realtime.binding?.destroy();
     realtime.provider.destroy();
@@ -111,7 +114,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     editorRef.current=null;
   },[]);
 
-  const attachRealtime = useCallback((editor:MonacoEditor.IStandaloneCodeEditor) => {
+  const attachRealtime = useCallback((editor?:MonacoEditor.IStandaloneCodeEditor) => {
     if(!env.realtimeReady){setRealtimeConnection('offline');return}
     if(!roomId||!ownerId)return;
     const name=editorDocumentName(roomId,slot);
@@ -119,11 +122,13 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     if(realtime?.documentName!==name){
       destroyRealtime();
       const doc=new Y.Doc(),awarenessStyles=new Set<HTMLStyleElement>();
+      let sharedInput: ReturnType<typeof createSharedTerminalInput> | undefined;
       const provider=new HocuspocusProvider({
         url:env.hocuspocusUrl,name,document:doc,token:getAccessToken,flushDelay:80,
-        onStatus:({status})=>setRealtimeConnection(status==='connected'?'connected':status==='connecting'?'connecting':'reconnecting'),
+        onStatus:({status})=>{if(status!=='connected')sharedInput?.disconnect();setRealtimeConnection(status==='connected'?'connected':status==='connecting'?'connecting':'reconnecting')},
+        onSynced:({state})=>{if(state)sharedInput?.connect()},
         onAuthenticationFailed:()=>setRealtimeConnection('offline'),
-        onStateless:({payload})=>{try{handleRoomEvent(JSON.parse(payload) as RoomEventEnvelope)}catch{/* ignore malformed non-application payloads */}},
+        onStateless:({payload})=>{if(sharedInput?.receive(payload))return;try{handleRoomEvent(JSON.parse(payload) as RoomEventEnvelope)}catch{/* ignore malformed non-application payloads */}},
         onAwarenessChange:({states})=>{
           awarenessStyles.forEach(style=>style.remove());awarenessStyles.clear();
           for(const state of states){
@@ -140,14 +145,21 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         },
         onDestroy:()=>{awarenessStyles.forEach(style=>style.remove());awarenessStyles.clear()},
       });
+      if(slot==='A')sharedInput=createSharedTerminalInput({
+        roomId,send:payload=>provider.sendStateless(payload),
+        read:()=>useSessionStore.getState().sharedTerminal.stdin,
+        apply:stdin=>{if(useSessionStore.getState().roomId===roomId)useSessionStore.getState().setSharedStdin(stdin)},
+        subscribe:listener=>useSessionStore.subscribe(state=>{if(state.roomId===roomId)listener()}),
+        onError:error=>{if(useSessionStore.getState().roomId===roomId)useSessionStore.setState({error})},
+      });
       const unregisterTyping=registerRoomTypingSender(roomId,slot,(isTyping)=>provider.awareness?.setLocalStateField('typing',isTyping));
       const clearTypingObservation=()=>{const presence=clearRoomTypingObservation(roomId,slot);useSessionStore.getState().receiveTypingPresence(presence.userId,presence.isTyping)};
-      realtime={documentName:name,provider,doc,binding:null,editor:null,model:null,awarenessStyles,unregisterTyping,clearTypingObservation,releaseCursor:()=>{}};
+      realtime={documentName:name,provider,doc,binding:null,editor:null,model:null,awarenessStyles,unregisterTyping,clearTypingObservation,releaseSharedInput:()=>sharedInput?.destroy(),releaseCursor:()=>{}};
       realtimeRef.current=realtime;
       provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:participantColor(user?.id??'')});
     }
-    const model=editor.getModel();
-    if(!model||!realtime)return;
+    const model=editor?.getModel();
+    if(!editor||!model||!realtime)return;
     if(realtime.binding&&realtime.editor===editor&&realtime.model===model)return;
     if(!realtime.model?.isDisposed())realtime.binding?.destroy();
     realtime.releaseCursor();
@@ -163,7 +175,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     attachRealtime(editor);
   },[attachRealtime]);
 
-  useEffect(()=>{if(editorRef.current)attachRealtime(editorRef.current)},[attachRealtime]);
+  useEffect(()=>{attachRealtime(editorRef.current??undefined)},[attachRealtime]);
 
   useEffect(()=>{
     realtimeRef.current?.provider.awareness?.setLocalStateField('user',{id:user?.id,name:user?.displayName??'Coder',color:participantColor(user?.id??'')});
