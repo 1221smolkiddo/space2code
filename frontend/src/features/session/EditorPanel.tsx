@@ -95,14 +95,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     realtime.awarenessLabels.clear();
     realtime.unregisterTyping();
     realtime.clearTypingObservation();
-    realtime.binding?.destroy();
+    if(!realtime.model?.isDisposed())realtime.binding?.destroy();
     realtime.provider.destroy();
     realtime.doc.destroy();
   },[]);
 
   const releaseEditorBinding = useCallback(() => {
     const realtime=realtimeRef.current;
-    realtime?.binding?.destroy();
+    // y-monaco already destroys the binding when Monaco disposes its model.
+    if(realtime&&!realtime.model?.isDisposed())realtime.binding?.destroy();
     if(realtime){realtime.binding=null;realtime.editor=null;realtime.model=null}
     editorRef.current=null;
   },[]);
@@ -145,7 +146,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     const model=editor.getModel();
     if(!model||!realtime)return;
     if(realtime.binding&&realtime.editor===editor&&realtime.model===model)return;
-    realtime.binding?.destroy();
+    if(!realtime.model?.isDisposed())realtime.binding?.destroy();
     const binding=new MonacoBinding(realtime.doc.getText('code'),model,new Set([editor]),realtime.provider.awareness);
     realtimeRef.current={...realtime,binding,editor,model};
   },[currentSlot,destroyRealtime,handleRoomEvent,ownerId,roomId,setRealtimeConnection,slot,user?.displayName,user?.id]);

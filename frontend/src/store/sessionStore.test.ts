@@ -172,3 +172,71 @@ describe('authoritative session integration',()=>{
     expect(useSessionStore.getState().error).toBe('Session expired')
   })
 })
+
+describe('normal / Explain identity and authority invariants',()=>{
+  let eventSequence=0
+  for(const viewerSlot of ['A','B'] as const){
+    for(const grantBefore of [false,true]){
+      it(`preserves viewer ${viewerSlot} identity and independent grants ${grantBefore?'before':'after'} Explain, reconnect, and refresh hydration`,async()=>{
+        const viewerId=viewerSlot==='A'?userA:userB
+        const partnerId=viewerSlot==='A'?userB:userA
+        const partnerSlot=viewerSlot==='A'?'B':'A'
+        const viewerRoom={...room,partner:{userId:partnerId,displayName:viewerSlot==='A'?'Grace Hopper':'Ada Lovelace',avatarUrl:null}}
+        useAuthStore.setState({user:{id:viewerId,email:'viewer@example.com',displayName:'Viewer',avatarUrl:null}})
+        mocks.getWithClock.mockResolvedValue({data:{...response,room:viewerRoom},meta:{serverTimeOffsetMs:0}})
+        await useSessionStore.getState().hydrate(room.id)
+        const ownGrant={sessionId:room.id,editorOwnerId:viewerId,granteeId:partnerId,scope:'session' as const,grantedAt:room.createdAt,revokedAt:null,consumedAt:null}
+        const partnerGrant={...ownGrant,editorOwnerId:partnerId,granteeId:viewerId}
+        const permissionEvent=(permission:typeof ownGrant|null,ownerId=partnerId,granteeId=viewerId)=>{
+          useSessionStore.getState().handleRoomEvent({version:1,roomId:room.id,event:{type:'permission.changed',occurredAt:`invariants-${++eventSequence}`,ownerId,granteeId,permission}})
+        }
+        const assertIdentity=()=>{
+          const state=useSessionStore.getState()
+          expect(state.currentSlot).toBe(viewerSlot)
+          expect(state.room?.participants).toEqual(room.participants)
+          expect(state.room?.partner).toEqual(viewerRoom.partner)
+          expect(state.documents).toEqual(response.documents)
+          expect(state.canWrite(viewerSlot)).toBe(true)
+        }
+        assertIdentity()
+        expect(useSessionStore.getState().canWrite(partnerSlot)).toBe(false)
+        if(grantBefore)permissionEvent(partnerGrant)
+        permissionEvent(ownGrant,viewerId,partnerId)
+        useSessionStore.setState({
+          editorA:{...useSessionStore.getState().editorA,stdout:'A output',stderr:'A error',stdin:'A input',isOutputOpen:true,outputState:'success'},
+          editorB:{...useSessionStore.getState().editorB,stdout:'B output',stderr:'B error',stdin:'B input',isOutputOpen:true,outputState:'error'},
+        })
+        const before=useSessionStore.getState()
+        const active={...explainState,active:true,targetSlot:partnerSlot,controllerId:partnerId,revision:1}
+        mocks.activate.mockResolvedValue({state:active})
+        mocks.deactivate.mockResolvedValue({state:{...explainState,revision:2}})
+        await useSessionStore.getState().toggleExplainMode(partnerSlot)
+        assertIdentity()
+        expect(useSessionStore.getState().canWrite(partnerSlot)).toBe(grantBefore)
+        await useSessionStore.getState().toggleExplainMode()
+        assertIdentity()
+        expect(useSessionStore.getState().editorA).toEqual(before.editorA)
+        expect(useSessionStore.getState().editorB).toEqual(before.editorB)
+        expect(useSessionStore.getState().permissions).toEqual(before.permissions)
+        if(!grantBefore)permissionEvent(partnerGrant)
+        expect(useSessionStore.getState().canWrite(partnerSlot)).toBe(true)
+        useSessionStore.getState().setRealtimeConnection('reconnecting')
+        useSessionStore.getState().setRealtimeConnection('connected')
+        assertIdentity()
+        expect(useSessionStore.getState().canWrite(partnerSlot)).toBe(true)
+
+        // A refreshed participant obtains the same slot and grants from the server.
+        mocks.permissions.mockResolvedValue({requests:[],permissions:[ownGrant,partnerGrant]})
+        await useSessionStore.getState().hydrate(room.id)
+        assertIdentity()
+        expect(useSessionStore.getState().canWrite(partnerSlot)).toBe(true)
+        permissionEvent(null)
+        assertIdentity()
+        expect(useSessionStore.getState().canWrite(partnerSlot)).toBe(false)
+        expect(useSessionStore.getState().permissions).toEqual([ownGrant])
+        permissionEvent(null,viewerId,partnerId)
+        expect(useSessionStore.getState().permissions).toEqual([])
+      })
+    }
+  }
+})

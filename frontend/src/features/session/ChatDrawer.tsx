@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useSessionStore } from '../../store/sessionStore';
 import { useAuthStore } from '../../store/authStore';
 import { MessageSquare, Send, ChevronRight } from 'lucide-react';
@@ -10,6 +10,31 @@ export const ChatDrawer: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const idleTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
   const typingSent = useRef(false);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const newestMessageId = messages.at(-1)?.id;
+
+  useLayoutEffect(() => {
+    const container = messagesRef.current;
+    // Move only the conversation, before paint, including restored/remounted history.
+    if (container) container.scrollTop = container.scrollHeight;
+  }, [isChatOpen, isExplainMode, messages.length, newestMessageId]);
+
+  useLayoutEffect(() => {
+    const container = messagesRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    let previousHeight = container.clientHeight;
+    let previousScrollHeight = container.scrollHeight;
+    const observer = new ResizeObserver(() => {
+      // Keep the newest message visible as the drawer width/typing row changes,
+      // but preserve a user's position when they have scrolled into history.
+      const wasAtBottom = container.scrollTop + previousHeight >= previousScrollHeight - 1;
+      if (wasAtBottom) container.scrollTop = container.scrollHeight;
+      previousHeight = container.clientHeight;
+      previousScrollHeight = container.scrollHeight;
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [isChatOpen, messages.length, newestMessageId]);
   const partnerId=room?.partner?.userId??room?.participants.find((participant)=>participant.userId!==user?.id)?.userId;
   const partnerDisplayName=partnerId?participantName(room,partnerId,user?.id):'Partner';
 
@@ -111,6 +136,9 @@ export const ChatDrawer: React.FC = () => {
 
       {/* Message Stream */}
       <div
+        ref={messagesRef}
+        role="log"
+        aria-label="Chat messages"
         style={{
           flex: 1,
           padding: '0.85rem',

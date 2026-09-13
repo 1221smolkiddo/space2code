@@ -2,6 +2,30 @@ import { act, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Room, Slot } from '../../types'
 
+interface MockModel {
+  id:string
+  isDisposed:()=>boolean
+  dispose:()=>void
+  onWillDispose:(listener:()=>void)=>{dispose:()=>void}
+}
+
+function createMockModel(id:string):MockModel {
+  let disposed=false
+  const listeners=new Set<()=>void>()
+  return {
+    id,
+    isDisposed:()=>disposed,
+    onWillDispose:(listener)=>{
+      listeners.add(listener)
+      return {dispose:()=>{listeners.delete(listener)}}
+    },
+    dispose:()=>{
+      if(disposed)return
+      for(const listener of [...listeners])listener()
+      disposed=true
+    },
+  }
+}
 interface ProviderOptions {
   name: string
   document: { getText:(name:string)=>unknown }
@@ -26,15 +50,26 @@ vi.mock('@hocuspocus/provider',()=>({HocuspocusProvider:class{
   constructor(options:ProviderOptions){this.options=options;mocks.providers.push(this)}
 }}))
 vi.mock('y-monaco',()=>({MonacoBinding:class{
-  destroy=vi.fn()
+  disposeListener?:{dispose:()=>void}
+  destroy=vi.fn(()=>this.disposeListener?.dispose())
   text:unknown;model:unknown;editors:unknown
-  constructor(text:unknown,model:unknown,editors:unknown){this.text=text;this.model=model;this.editors=editors;mocks.bindings.push(this)}
+  constructor(text:unknown,model:MockModel,editors:unknown){
+    this.text=text;this.model=model;this.editors=editors;mocks.bindings.push(this)
+    // y-monaco destroys its own binding when Monaco disposes the model.
+    this.disposeListener=model.onWillDispose(()=>this.destroy())
+  }
 }}))
 vi.mock('@monaco-editor/react',async()=>{
   const React=await import('react')
   function MockMonacoEditor({onMount,options}:{onMount:(editor:(typeof mocks.editors)[number])=>void;options:{readOnly:boolean}}){
-    const editor=React.useMemo(()=>{const model={id:`model-${mocks.editors.length}`};const value={getModel:vi.fn(()=>model),getValue:vi.fn(()=>''),getSelection:vi.fn(),deltaDecorations:vi.fn(()=>[])};mocks.editors.push(value);return value},[])
+    const editor=React.useMemo(()=>{
+      const model=createMockModel(`model-${mocks.editors.length}`)
+      const value={getModel:vi.fn(()=>model),getValue:vi.fn(()=>''),getSelection:vi.fn(),deltaDecorations:vi.fn(()=>[])}
+      mocks.editors.push(value)
+      return value
+    },[])
     React.useEffect(()=>{onMount(editor)},[editor,onMount])
+    React.useEffect(()=>()=>editor.getModel().dispose(),[editor])
     return React.createElement('div',{'data-testid':'monaco','data-readonly':String(options.readOnly)})
   }
   return {default:MockMonacoEditor}
@@ -147,6 +182,60 @@ describe('EditorPanel realtime lifecycle',()=>{
       rendered.unmount()
       expect(provider.destroy).toHaveBeenCalledTimes(1)
       expect(mocks.bindings[2]!.destroy).toHaveBeenCalledTimes(1)
+    })
+  }
+})
+
+describe('both viewers after Explain Mode',()=>{
+  for(const viewerSlot of ['A','B'] as const){
+    it(`keeps viewer ${viewerSlot} desk names, terminal labels and authority through both Explain layouts`,()=>{
+      const viewerId=viewerSlot==='A'?userA:userB
+      const partnerId=viewerSlot==='A'?userB:userA
+      const partnerSlot=viewerSlot==='A'?'B':'A'
+      const partnerName=viewerSlot==='A'?'Grace Hopper':'Ada Lovelace'
+      useAuthStore.setState({user:{id:viewerId,email:'viewer@example.com',displayName:'Viewer',avatarUrl:null}})
+      useSessionStore.setState({room:{...room,partner:{userId:partnerId,displayName:partnerName,avatarUrl:null}},roomId,currentSlot:viewerSlot,permissions:[],permissionRequests:[],annotations:[],editorA:{...useSessionStore.getState().editorA,isOutputOpen:true},editorB:{...useSessionStore.getState().editorB,isOutputOpen:true}})
+      const view=render(<>{(['A','B'] as const).map(slot=><EditorPanel key={slot} slot={slot} username={slot===viewerSlot?'You':partnerName} partnerName={partnerName} isOwner={slot===viewerSlot} isPartnerOnline language="python"/>)}</>)
+      const assertNormal=(partnerWritable:boolean)=>{
+        expect(screen.getByText('You')).toBeInTheDocument()
+        expect(screen.getByText(partnerName)).toBeInTheDocument()
+        expect(screen.getByText('Your Terminal')).toBeInTheDocument()
+        expect(screen.getByText(`${partnerName}'s Terminal`)).toBeInTheDocument()
+        expect(screen.queryByText(/^owner$/i)).not.toBeInTheDocument()
+        const editors=screen.getAllByTestId('monaco')
+        expect(editors[viewerSlot==='A'?0:1]).toHaveAttribute('data-readonly','false')
+        expect(editors[partnerSlot==='A'?0:1]).toHaveAttribute('data-readonly',String(!partnerWritable))
+        expect(useSessionStore.getState().currentSlot).toBe(viewerSlot)
+        expect(mocks.providers).toHaveLength(2)
+        expect(mocks.providers.map(p=>p.options.name)).toEqual([editorDocumentName(roomId,'A'),editorDocumentName(roomId,'B')])
+        for(const provider of mocks.providers)expect(provider.destroy).not.toHaveBeenCalled()
+      }
+      assertNormal(false)
+      const originalDocs=mocks.providers.map(p=>p.options.document)
+      for(const primary of ['A','B'] as const){
+        act(()=>useSessionStore.setState({isExplainMode:true,explainPrimarySlot:primary}))
+        expect(screen.getAllByTestId('monaco')).toHaveLength(1)
+        expect(screen.queryByText('Your Terminal')).not.toBeInTheDocument()
+        act(()=>useSessionStore.setState({isExplainMode:false}))
+        assertNormal(false)
+      }
+      const grant={sessionId:roomId,editorOwnerId:partnerId,granteeId:viewerId,scope:'session' as const,grantedAt:room.createdAt,revokedAt:null,consumedAt:null}
+      act(()=>useSessionStore.setState({permissions:[grant]}))
+      assertNormal(true)
+      act(()=>useSessionStore.setState({isExplainMode:true,explainPrimarySlot:viewerSlot}))
+      act(()=>useSessionStore.setState({isExplainMode:false}))
+      assertNormal(true)
+      for(const provider of mocks.providers){
+        act(()=>provider.options.onStatus?.({status:'reconnecting'}))
+        act(()=>provider.options.onStatus?.({status:'connected'}))
+      }
+      assertNormal(true)
+      expect(mocks.providers.map(p=>p.options.document)).toEqual(originalDocs)
+      act(()=>useSessionStore.setState({permissions:[]}))
+      assertNormal(false)
+      view.unmount()
+      for(const provider of mocks.providers)expect(provider.destroy).toHaveBeenCalledTimes(1)
+      for(const binding of mocks.bindings)expect(binding.destroy).toHaveBeenCalledTimes(1)
     })
   }
 })
