@@ -240,3 +240,86 @@ describe('normal / Explain identity and authority invariants',()=>{
     }
   }
 })
+
+describe('stdin and immediate terminal synchronization',()=>{
+  const result=(executionId:string,stdout='Alice\n')=>({executionId,status:'completed' as const,stdout,stderr:'',compileOutput:'',exitCode:0,signal:null,runtime:{language:'python',version:'3',cpuTimeMs:null,wallTimeMs:null,memoryBytes:null},outputTruncated:false})
+  let sequence=0
+  const event=(executionId:string,targetSlot:'A'|'B',type:'execution.started'|'execution.completed',scope:'personal'|'explain'='personal')=>{
+    const common={occurredAt:'terminal-'+(++sequence),executionId,userId:targetSlot==='A'?userA:userB,targetSlot,scope}
+    useSessionStore.getState().handleRoomEvent({version:1,roomId:room.id,event:type==='execution.started'?{...common,type}:{...common,type,status:'completed',result:result(executionId)}})
+  }
+  for(const stdin of ['', 'Alice', 'Alice\n22', 'Alice\n22\n']){
+    it(`sends exact batch stdin ${JSON.stringify(stdin)} for each desk and the Shared Terminal`,async()=>{
+      await useSessionStore.getState().hydrate(room.id)
+      useSessionStore.getState().setStdin('A',stdin)
+      useSessionStore.getState().setStdin('B','B input')
+      useSessionStore.getState().setSharedStdin('shared\ninput\n')
+      mocks.run.mockResolvedValue(result('stdin-test'))
+      await useSessionStore.getState().runCode('A','name=input(); print(name)')
+      expect(mocks.run).toHaveBeenLastCalledWith(room.id,{language:'python',source:'name=input(); print(name)',stdin,targetSlot:'A',scope:'personal'})
+      useSessionStore.setState({isExplainMode:true})
+      await useSessionStore.getState().runCode('B','source')
+      expect(mocks.run).toHaveBeenLastCalledWith(room.id,expect.objectContaining({stdin:'shared\ninput\n',targetSlot:'B',scope:'explain'}))
+      useSessionStore.setState({isExplainMode:false})
+      await useSessionStore.getState().runCode('B','source')
+      expect(mocks.run).toHaveBeenLastCalledWith(room.id,expect.objectContaining({stdin:'B input',targetSlot:'B',scope:'personal'}))
+      expect(useSessionStore.getState().editorA.stdin).toBe(stdin)
+      expect(useSessionStore.getState().sharedTerminal.stdin).toBe('shared\ninput\n')
+    })
+  }
+  for(const viewer of [userA,userB]){
+    it(`updates the right rendered terminal synchronously for viewer ${viewer}, across layouts and duplicate deliveries`,async()=>{
+      useAuthStore.setState({user:{id:viewer,email:'viewer@example.com',displayName:'Viewer',avatarUrl:null}})
+      await useSessionStore.getState().hydrate(room.id)
+      useSessionStore.getState().setStdin('A','keep A')
+      useSessionStore.getState().setStdin('B','keep B')
+      for(const slot of ['A','B'] as const){
+        event('first-'+slot,slot,'execution.started')
+        event('new-'+slot,slot,'execution.started')
+        event('first-'+slot,slot,'execution.completed')
+        expect(useSessionStore.getState()[slot==='A'?'editorA':'editorB'].outputState).toBe('running')
+        event('new-'+slot,slot,'execution.completed')
+        expect(useSessionStore.getState()[slot==='A'?'editorA':'editorB']).toMatchObject({stdout:'Alice\n',stdin:'keep '+slot,outputState:'success'})
+      }
+      const envelope={version:1 as const,roomId:room.id,event:{type:'execution.completed' as const,occurredAt:'duplicate-'+viewer,executionId:'new-A',userId:userA,targetSlot:'A' as const,scope:'personal' as const,status:'completed',result:result('new-A')}}
+      useSessionStore.getState().handleRoomEvent(envelope)
+      const snapshot=useSessionStore.getState().editorA
+      useSessionStore.getState().handleRoomEvent(envelope)
+      expect(useSessionStore.getState().editorA).toBe(snapshot)
+      useSessionStore.setState({isExplainMode:true})
+      event('shared','A','execution.started','explain')
+      event('shared','A','execution.completed','explain')
+      expect(useSessionStore.getState().sharedTerminal.stdout).toBe('Alice\n')
+      expect(useSessionStore.getState().editorA).toBe(snapshot)
+      useSessionStore.setState({isExplainMode:false})
+      event('after-explain','B','execution.started')
+      event('after-explain','B','execution.completed')
+      expect(useSessionStore.getState().editorB.executionId).toBe('after-explain')
+    })
+  }
+  it('does not let a delayed HTTP response overwrite a newer received execution',async()=>{
+    await useSessionStore.getState().hydrate(room.id)
+    let finish:(value:ReturnType<typeof result>)=>void=()=>{}
+    mocks.run.mockReturnValue(new Promise(resolve=>{finish=resolve}))
+    const running=useSessionStore.getState().runCode('A','print(1)')
+    event('old-http','A','execution.started')
+    event('old-http','A','execution.completed')
+    event('new-realtime','A','execution.started')
+    event('new-realtime','A','execution.completed')
+    finish(result('old-http','old output'))
+    await running
+    expect(useSessionStore.getState().editorA).toMatchObject({executionId:'new-realtime',stdout:'Alice\n'})
+  })
+})
+
+
+it('ignores a failed old request after a partner starts a newer job on that desk',async()=>{
+  await useSessionStore.getState().hydrate(room.id)
+  let reject:(error:Error)=>void=()=>{}
+  mocks.run.mockReturnValue(new Promise((_resolve,fail)=>{reject=fail}))
+  const running=useSessionStore.getState().runCode('A','print(1)')
+  useSessionStore.getState().handleRoomEvent({version:1,roomId:room.id,event:{type:'execution.started',occurredAt:'partner-new-job',executionId:'partner-job',userId:userB,targetSlot:'A',scope:'personal'}})
+  reject(new Error('old request failed'))
+  await running
+  expect(useSessionStore.getState().editorA).toMatchObject({executionId:'partner-job',outputState:'running',stderr:''})
+})

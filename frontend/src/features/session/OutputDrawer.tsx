@@ -18,10 +18,13 @@ export const OutputDrawer: React.FC<OutputDrawerProps> = ({
   onStdinChange,
 }) => {
   const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<'stdout' | 'stdin'>('stdout');
+  const execution=`${state.pendingRequestId??''}:${state.executionId??''}:${state.outputState}`;
+  const [tabSelection,setTabSelection]=useState<{tab:'stdout'|'stdin';execution:string}|null>(null);
+  const activeTab=tabSelection?.execution===execution?tabSelection.tab:'stdout';
+  const setActiveTab=(tab:'stdout'|'stdin')=>setTabSelection({tab,execution});
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(state.stdout || state.stderr || 'No output');
+    navigator.clipboard.writeText([state.stdout,state.stderr].filter(Boolean).join('\n') || 'No output');
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -80,7 +83,7 @@ export const OutputDrawer: React.FC<OutputDrawerProps> = ({
                 color: activeTab === 'stdin' ? '#EBE6D8' : '#8A8578',
               }}
             >
-              Interactive Stdin
+              Stdin
             </button>
           </div>
         </div>
@@ -120,7 +123,7 @@ export const OutputDrawer: React.FC<OutputDrawerProps> = ({
         ) : activeTab === 'stdin' ? (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <span style={{ fontSize: '0.7rem', color: '#8A8578', marginBottom: '0.25rem' }}>
-              Standard input passed to process:
+              Enter input before Run. Each line supplies the next input value.
             </span>
             <textarea
               value={state.stdin}
@@ -150,7 +153,7 @@ export const OutputDrawer: React.FC<OutputDrawerProps> = ({
               color: state.stderr ? 'var(--error-color)' : '#E0DDD5',
             }}
           >
-            {state.stdout || state.stderr}
+            {[state.stdout,state.stderr].filter(Boolean).join('\n')}
           </pre>
         ) : (
           <div style={{ color: '#6A655A', fontStyle: 'italic', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

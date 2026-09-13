@@ -9,6 +9,7 @@ const executeSchema = z.object({
   language: z.string().min(1),
   source: z.string(),
   stdin: z.string().optional().default(''),
+  targetSlot: z.enum(['A', 'B']).optional(),
   scope: z.enum(['personal', 'explain']).optional().default('personal'),
 })
 

@@ -1,3 +1,7 @@
+import {ExecutionService} from '../src/execution/service.js'
+import {FakeExecutionProvider} from '../src/execution/fake-provider.js'
+import {InMemoryExecutionGuard} from '../src/execution/guard.js'
+import {initialLanguageRegistry} from '../src/execution/language-registry.js'
 import { describe, expect, it, vi } from 'vitest'
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider'
 import WebSocket from 'ws'
@@ -20,6 +24,7 @@ class BrowserSocket extends WebSocket {
   constructor(url:string){super(url,{origin})}
 }
 interface Client {
+  messages:string[]
   doc:Y.Doc
   provider:HocuspocusProvider
   socket:HocuspocusProviderWebsocket
@@ -42,11 +47,11 @@ describe('two-user realtime after Explain Mode',()=>{
         const clients:Client[]=[]
         const received:string[]=[]
         const open=async(user:string,slot:'A'|'B')=>{
-          const doc=new Y.Doc()
+          const doc=new Y.Doc(),messages:string[]=[]
           const socket=new HocuspocusProviderWebsocket({url:`ws://127.0.0.1:${realtime.server.address.port}`,WebSocketPolyfill:BrowserSocket,initialDelay:0})
-          const provider=new HocuspocusProvider({name:editorDocumentName(room.id,slot),document:doc,token:user,websocketProvider:socket,flushDelay:0,onStateless:({payload})=>received.push(payload)})
+          const provider=new HocuspocusProvider({name:editorDocumentName(room.id,slot),document:doc,token:user,websocketProvider:socket,flushDelay:0,onStateless:({payload})=>{received.push(payload);messages.push(payload)}})
           let destroyed=false
-          const client={doc,provider,socket,destroy:()=>{if(destroyed)return;destroyed=true;provider.destroy();socket.destroy();doc.destroy()}}
+          const client={doc,provider,socket,messages,destroy:()=>{if(destroyed)return;destroyed=true;provider.destroy();socket.destroy();doc.destroy()}}
           clients.push(client)
           provider.awareness?.setLocalStateField('user',{id:user,name:user===A?'Ada':'Grace'})
           provider.attach()
@@ -95,6 +100,13 @@ describe('two-user realtime after Explain Mode',()=>{
           await vi.waitFor(()=>expect(received.some(payload=>payload.includes('"active":false'))).toBe(true))
           expect((await rooms.get(A,room.id)).participants.map(p=>[p.slot,p.userId])).toEqual([['A',A],['B',B]])
           if(!grantBefore){await grant(A,B);await grant(B,A)}
+          const execution=new ExecutionService(repository,new FakeExecutionProvider(),initialLanguageRegistry({python:'*',java:'*',c:'*',cpp:'*',javascript:'*'}),new InMemoryExecutionGuard({windowMs:60000,userLimit:10,roomLimit:20}),{maxSourceBytes:1000,maxStdinBytes:1000,maxOutputBytes:1000,timeoutMs:1000},undefined,events)
+          for(const [user,target,scope] of [[A,'A','personal'],[B,'B','personal'],[A,'B','personal'],[B,'A','explain']] as const){
+            const result=await execution.execute({roomId:room.id,userId:user,targetSlot:target,scope,language:'python',source:'print(input())',stdin:'Alice\n'})
+            for(const client of [aa,ab,ba,bb]){
+              await vi.waitFor(()=>expect(client.messages.map(payload=>JSON.parse(payload).event).filter(event=>event.type==='execution.completed'&&event.executionId===result.executionId)).toEqual([expect.objectContaining({targetSlot:target,scope,result})]))
+            }
+          }
           await insert(ba,aa,'B edits A after Explain\n')
           await insert(ab,bb,'A edits B after Explain\n')
           await assertCursor(ba,aa,ab,B)

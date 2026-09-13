@@ -13,6 +13,8 @@ import type {
 } from '../types'
 
 export interface EditorCardState {
+  executionId?:string
+  pendingRequestId?:number
   outputState: 'idle' | 'running' | 'success' | 'error' | 'compile_error'
   stdout: string
   stderr: string
@@ -114,6 +116,7 @@ const terminalResult = (current:EditorCardState,result:ExecutionResult):EditorCa
   stderr:[result.compileOutput,result.stderr].filter(Boolean).join('\n')||(result.status==='completed'?'':`Execution ended with ${result.status.replaceAll('_',' ')}.`),
   isOutputOpen:true,
 })
+let executionRequestSequence=0
 const seenEvents = new Set<string>()
 let questionTimer:ReturnType<typeof setTimeout>|null=null
 let partnerTypingTimer:ReturnType<typeof setTimeout>|null=null
@@ -191,10 +194,20 @@ export const useSessionStore=create<SessionState>((set,get)=>({
       set({permissions,permissionRequests:requests});const current=get().currentSlot,userId=useAuthStore.getState().user?.id
       for(const slot of ['A','B'] as const){const owner=get().room?.participants.find(p=>p.slot===slot)?.userId;if(slot!==current&&owner===event.ownerId&&event.granteeId===userId)set({[slot==='A'?'editorA':'editorB']:{...get()[slot==='A'?'editorA':'editorB'],permission:event.permission?'granted':'none',permissionScope:event.permission?.scope}})}
     }
-    else if(event.type==='execution.started'&&event.scope==='explain')set({sharedTerminal:{...get().sharedTerminal,outputState:'running',stdout:'',stderr:'',isOutputOpen:true}})
-    else if(event.type==='execution.completed'&&event.scope==='explain'){
-      if(event.result)set({sharedTerminal:terminalResult(get().sharedTerminal,event.result)})
-      else set({sharedTerminal:{...get().sharedTerminal,outputState:'error',stderr:`Execution ended with ${event.status.replaceAll('_',' ')}.`,isOutputOpen:true}})
+    else if(event.type==='execution.started'||event.type==='execution.completed'){
+      const slot=event.targetSlot??get().room?.participants.find(p=>p.userId===event.userId)?.slot
+      const key=event.scope==='explain'?'sharedTerminal':slot==='A'?'editorA':slot==='B'?'editorB':null
+      if(!key)return
+      const terminal=get()[key]
+      if(event.type==='execution.started'){
+        set({[key]:{...terminal,pendingRequestId:event.userId===useAuthStore.getState().user?.id?terminal.pendingRequestId:undefined,executionId:event.executionId,outputState:'running',stdout:'',stderr:'',isOutputOpen:true}})
+      }else{
+        // Both desk providers may deliver the same event; the event ID filter above
+        // handles duplicates. A late result must not replace a newer running job.
+        if(terminal.executionId&&terminal.executionId!==event.executionId)return
+        const next=event.result?terminalResult(terminal,event.result):{...terminal,outputState:'error' as const,stderr:`Execution ended with ${event.status.replaceAll('_',' ')}.`,isOutputOpen:true}
+        set({[key]:{...next,executionId:event.executionId}})
+      }
     }
   },
   receiveTypingPresence:(userId,isTyping)=>{
@@ -213,20 +226,23 @@ export const useSessionStore=create<SessionState>((set,get)=>({
   setStdin:(slot,stdin)=>{const key=slot==='A'?'editorA':'editorB';set({[key]:{...get()[key],stdin}})},
   setSharedStdin:(stdin)=>set({sharedTerminal:{...get().sharedTerminal,stdin}}),
   runCode:async(slot,source)=>{
-    const shared=get().isExplainMode
-    const key=slot==='A'?'editorA':'editorB'
-    const terminal=shared?get().sharedTerminal:get()[key]
+    const roomId=get().roomId
+    const key=get().isExplainMode?'sharedTerminal':slot==='A'?'editorA':'editorB'
+    const terminal=get()[key]
     if(terminal.outputState==='running')return
-    if(shared)set({sharedTerminal:{...terminal,outputState:'running',isOutputOpen:true,stdout:'',stderr:''}})
-    else set({[key]:{...terminal,outputState:'running',isOutputOpen:true,stdout:'',stderr:''}})
+    const pendingRequestId=++executionRequestSequence
+    set({[key]:{...terminal,executionId:undefined,pendingRequestId,outputState:'running',isOutputOpen:true,stdout:'',stderr:''}})
     try{
-      const result=await executionApi.run(get().roomId,{language:get().language,source,stdin:terminal.stdin,scope:shared?'explain':'personal'})
-      if(shared)set({sharedTerminal:terminalResult(get().sharedTerminal,result)})
-      else set({[key]:terminalResult(get()[key],result)})
+      const result=await executionApi.run(roomId,{language:get().language,source,stdin:terminal.stdin,targetSlot:slot,scope:key==='sharedTerminal'?'explain':'personal'})
+      const current=get()[key]
+      if(get().roomId!==roomId||current.pendingRequestId!==pendingRequestId)return
+      if(current.executionId&&current.executionId!==result.executionId)return
+      set({[key]:{...terminalResult(current,result),executionId:result.executionId}})
     }catch(error){
+      const current=get()[key]
+      if(get().roomId!==roomId||current.pendingRequestId!==pendingRequestId||current.outputState!=='running')return
       const message=safeError(error)
-      if(shared)set({sharedTerminal:{...get().sharedTerminal,outputState:'error',stderr:message,isOutputOpen:true},error:message})
-      else set({[key]:{...get()[key],outputState:'error',stderr:message},error:message})
+      set({[key]:{...current,outputState:'error',stderr:message,isOutputOpen:true},error:message})
     }
   },
   requestEditAccess:async(slot)=>{const owner=get().room?.participants.find(p=>p.slot===slot)?.userId;if(!owner)return;try{const result=await roomsApi.requestPermission(get().roomId,owner) as {permissionRequest:PermissionRequest};set({permissionRequests:[...get().permissionRequests.filter(r=>r.id!==result.permissionRequest.id),result.permissionRequest],[slot==='A'?'editorA':'editorB']:{...get()[slot==='A'?'editorA':'editorB'],permission:'pending'}})}catch(error){set({error:safeError(error)})}},

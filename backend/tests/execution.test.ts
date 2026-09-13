@@ -73,7 +73,7 @@ describe('ExecutionService', () => {
     expect(setup.provider.requests[0]).toMatchObject({ language: 'python', filename: 'main.py' })
   })
 
-  it('broadcasts complete output only for the room-scoped Explain terminal', async () => {
+  it('broadcasts complete output for shared and desk-scoped terminals', async () => {
     const setup = await liveExecution()
     await setup.service.execute({ ...request(setup.roomId, userA), scope: 'explain' })
     const sharedCompleted=setup.events.find((event)=>event.type==='execution.completed')
@@ -83,7 +83,7 @@ describe('ExecutionService', () => {
     await setup.service.execute({ ...request(setup.roomId, userA), scope: 'personal' })
     const personalCompleted=setup.events.find((event)=>event.type==='execution.completed')
     expect(personalCompleted).toMatchObject({type:'execution.completed',scope:'personal'})
-    expect(personalCompleted).not.toHaveProperty('result')
+    expect(personalCompleted).toMatchObject({targetSlot:'A',result:{stdout:'ok\n'}})
   })
 
   it('caps total captured output', async () => {

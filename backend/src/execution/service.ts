@@ -21,6 +21,7 @@ export interface ExecuteInput {
   source: string
   stdin: string
   scope?: 'personal' | 'explain'
+  targetSlot?: 'A' | 'B' | undefined
 }
 
 const systemClock: Clock = { now: () => new Date() }
@@ -43,6 +44,8 @@ export class ExecutionService {
     if (!room) throw new RoomError('NOT_A_PARTICIPANT', 'Session membership is required for execution')
     if (room.status !== 'live') throw new RoomError('INVALID_ROOM_STATE', 'Execution requires a live session')
 
+    const targetSlot=input.targetSlot??room.participants.find(p=>p.userId===input.userId)?.slot
+    if(!targetSlot||!room.participants.some(p=>p.slot===targetSlot))throw new RoomError('FORBIDDEN','Execution desk is not occupied')
     const requestedLanguage = this.registry.resolve(input.language)
     const roomLanguage = this.registry.resolve(room.language)
     if (requestedLanguage.id !== roomLanguage.id) {
@@ -59,7 +62,7 @@ export class ExecutionService {
     const lease = await this.guard.acquire(input.roomId, input.userId, started)
     await this.events.publish(input.roomId, {
       type: 'execution.started', occurredAt: started.toISOString(), executionId: lease.id, userId: input.userId,
-      scope,
+      scope, targetSlot,
     })
     await this.repository.touchActivity(input.roomId, started.toISOString())
 
@@ -82,8 +85,8 @@ export class ExecutionService {
       outcome = 'completed'
       await this.events.publish(input.roomId, {
         type: 'execution.completed', occurredAt: this.clock.now().toISOString(),
-        executionId: lease.id, userId: input.userId, status: result.status, scope,
-        ...(scope === 'explain' ? { result } : {}),
+        executionId: lease.id, userId: input.userId, status: result.status, scope, targetSlot,
+        result,
       })
       return result
     } catch (error) {
@@ -91,7 +94,7 @@ export class ExecutionService {
         await this.events.publish(input.roomId, {
           type: 'execution.completed', occurredAt: this.clock.now().toISOString(),
           executionId: lease.id, userId: input.userId, status: 'timed_out',
-          scope,
+          scope, targetSlot,
         })
         throw new ExecutionError('EXECUTION_TIMED_OUT', 'Execution exceeded the backend timeout')
       }
@@ -101,7 +104,7 @@ export class ExecutionService {
       await this.events.publish(input.roomId, {
         type: 'execution.completed', occurredAt: this.clock.now().toISOString(),
         executionId: lease.id, userId: input.userId, status,
-        scope,
+        scope, targetSlot,
       })
       if (error instanceof ExecutionError) throw error
       throw new ExecutionError('EXECUTION_PROVIDER_UNAVAILABLE', 'Execution provider is unavailable')

@@ -26,8 +26,8 @@ export type RoomEvent =
   | { type: 'question.updated'; occurredAt: string; slot: 'A' | 'B'; question: string | null }
   | { type: 'timer.started'; occurredAt: string; timer: SessionTimer }
   | { type: 'timer.expired'; occurredAt: string; timer: SessionTimer }
-  | { type: 'execution.started'; occurredAt: string; executionId: string; userId: string; scope: 'personal' | 'explain' }
-  | { type: 'execution.completed'; occurredAt: string; executionId: string; userId: string; status: string; scope: 'personal' | 'explain'; result?: ExecutionResult }
+  | { type: 'execution.started'; occurredAt: string; executionId: string; userId: string; targetSlot?: 'A' | 'B'; scope: 'personal' | 'explain' }
+  | { type: 'execution.completed'; occurredAt: string; executionId: string; userId: string; status: string; targetSlot?: 'A' | 'B'; scope: 'personal' | 'explain'; result?: ExecutionResult }
   | { type: 'chat.message'; occurredAt: string; message: ChatMessage }
   | { type: 'explain.state'; occurredAt: string; state: ExplainState; winnerId: string }
   | { type: 'explain.arbitrated'; occurredAt: string; state: ExplainState; winnerId: string }
