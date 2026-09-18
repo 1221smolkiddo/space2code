@@ -10,6 +10,7 @@ import {
   CurvedArrowDoodle 
 } from '../../components/doodles/DoodleAccents';
 import { Mail } from 'lucide-react';
+import { PASSWORD_MIN_LENGTH, PASSWORD_REQUIREMENTS } from '../../security/passwordSecurity';
 
 export const AuthPage: React.FC = () => {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
@@ -180,12 +181,19 @@ export const AuthPage: React.FC = () => {
             </label>
             <input
               type="password"
+              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+              minLength={mode === 'signup' ? PASSWORD_MIN_LENGTH : undefined}
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               style={{ width: '100%' }}
             />
+            {mode === 'signup' && (
+              <p style={{ margin: '0.3rem 0 0', fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                {PASSWORD_REQUIREMENTS} Known breached passwords are blocked.
+              </p>
+            )}
           </div>
 
           <button
