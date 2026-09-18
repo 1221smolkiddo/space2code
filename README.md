@@ -41,5 +41,4 @@ npm test
 npm run build
 ```
 
-See [the Phase 5 integration guide](docs/phase-5-integration.md) for the two-user manual harness and integration ownership boundaries.
 See [deployment](docs/deployment.md) and the [live validation checklist](docs/live-validation-checklist.md) before any release decision.
